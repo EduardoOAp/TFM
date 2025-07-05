@@ -1,0 +1,35 @@
+DATA_ROOT = "data"
+TEMPORAL_ROOT = "temporal"
+MODELOS_ROOT = "modelos"
+RESULTADOS_ROOT = "resultados"
+
+SUBAGENTE_LIQUIDEZ_URL = "http://localhost:8500/liquidez"
+SUBAGENTE_DIVERSIFICACION_URL = "http://localhost:8501/diversificacion"
+SUBAGENTE_DESEQUILIBRIO_URL = "http://localhost:8502/desequilibrio"
+SUBAGENTE_FLUJOS_URL = "http://localhost:8503/flujosfondos"
+SUBAGENTE_SOSTENIBILIDAD_URL = "http://localhost:8504/sostenibilidad"
+
+AGENTE_LIQUIDEZ = "Agente de Riesgo de Liquidez"
+LIQ_MODULO_CLUSTERING = "Clustering de riesgo de liquidez"
+LIQ_MODULO_ANOMALIAS = "Detección de anomalías de liquidez"
+LIQ_MODULO_FORECASTING = "Forecasting de liquidez del activo neto"
+
+AGENTE_DIVERSIFICACION = "Agente de Diversificación"
+DIV_MODULO_ANALISIS = "Análisis de diversificación de portafolio"
+DIV_MODULO_OPTIMIZACION = "Optimización de portafolios líquidos"
+
+AGENTE_DESEQUILIBRIO = "Agente de Desequilibrio Financiero"
+DES_MODULO_CLUSTERING = "Clustering de Riesgo Financiero"
+DES_MODULO_ANOMALIAS = "Detección de Anomalías Financieras"
+DES_MODULO_FORECASTING = "Forecasting Financiero activo neto"
+DES_MODULO_FORECAST_VC = "Forecasting Financiero valor cuota"
+
+AGENTE_FLUJOS = "Agente de Flujos de Fondos"
+FLU_MODULO_CLUSTERING = "Clustering de flujos de afiliados"
+FLU_MODULO_FORECASTING = "Forecasting de fuga de afiliados"
+FLU_MODULO_RELACION = "Relación entre rentabilidad y flujos"
+
+AGENTE_SOSTENIBILIDAD = "Agente de Sostenibilidad"
+SOS_MODULO_FORECASTING = "Forecasting de déficit financiero"
+SOS_MODULO_FORECAST_DEMO = "Forecasting demográfico"
+SOS_MODULO_CLUSTERING = "Clustering de sostenibilidad"
