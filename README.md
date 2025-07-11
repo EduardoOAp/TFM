@@ -12,9 +12,13 @@
 
 #### Paso 6: Levantar otras API  (en otra terminal)
 python -m uvicorn riesgo_agente.agenteRiesgoLiquidez.api_liquidez:app --reload --port 8500
+
 python -m uvicorn riesgo_agente.agenteRiesgoLiquidez.api_diversificacion:app --reload --port 8501
+
 python -m uvicorn riesgo_agente.agenteRiesgoLiquidez.api_desequilibrio:app --reload --port 8502
+
 python -m uvicorn riesgo_agente.agenteRiesgoLiquidez.api_flujofondos:app --reload --port 8503
+
 python -m uvicorn riesgo_agente.agenteRiesgoLiquidez.api_sostenibilidad:app --reload --port 8504
 
 #### Paso 4: Ejecutar el orquestador (en otra terminal o programado en cron)
