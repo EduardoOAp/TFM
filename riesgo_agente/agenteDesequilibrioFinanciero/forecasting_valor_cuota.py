@@ -43,7 +43,8 @@ class ForecastingValorCuota:
         self.agente = AGENTE_DESEQUILIBRIO
         self.modulo = DES_MODULO_FORECAST_VC
         self.resultado = []
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC, self.fechaTexto)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)        
         os.makedirs(self.ruta_resultado, exist_ok=True)

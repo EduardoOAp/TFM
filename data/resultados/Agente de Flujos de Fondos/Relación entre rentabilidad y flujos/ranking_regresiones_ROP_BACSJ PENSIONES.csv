@@ -1,0 +1,10 @@
+variable_objetivo,r2_ajustado,variables_significativas,AIC,BIC
+valor_cuota_promedio,0.9244,4,2274.22,2301.01
+comision_saldo,0.8338,4,-249.81,-223.02
+tasa_captacion_afiliados_lt,0.8046,4,-363.29,-336.5
+flujo_neto_afiliados_fondos,0.6062,2,-382.65,-355.86
+rentabilidad_real_anual,0.5635,7,896.17,922.96
+rango_mensual_valorcuota,0.5271,2,1635.4,1662.19
+sharpe_ratio,0.4134,2,713.77,740.56
+tasa_crecimiento_rentabilidad,0.3416,3,2057.95,2084.74
+rentabilidad_acumulada_mes,0.0725,2,452.69,479.48

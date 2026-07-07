@@ -14,7 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 ###
 from riesgo_agente.utils.config import AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING 
 from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
+#from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
 
 
 class ClusteringEvaluator:
@@ -32,7 +32,8 @@ class ClusteringEvaluator:
         self.modulo = DES_MODULO_CLUSTERING
         self.usar_normalizado = usar_normalizado
         self.historial_scores = []  # Para acumulación si se usa score normalizado
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING,self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
         os.makedirs(self.ruta_resultado, exist_ok=True)
@@ -280,10 +281,12 @@ class ClusteringEvaluator:
         self.resultado = ["Se ejecutó clustering de desequilibrio financiero"]
 
 class VisualizadorClusters:
-    def __init__(self, df_resultado, columnas_cluster):
+    def __init__(self, df_resultado, columnas_cluster, MostrarGrafico: bool = True):
         self.df_resultado = df_resultado.copy()
         self.columnas_cluster = columnas_cluster
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
+        self.fechaTexto = pd.to_datetime(df_resultado['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING, self.fechaTexto)
+        self.mostrarGrafico = MostrarGrafico
 
     def graficar_dispersion(self, guardar=False):
         plt.figure(figsize=(10, 6))
@@ -293,6 +296,8 @@ class VisualizadorClusters:
         ruta = os.path.join(self.ruta_resultado,"dispersion.png")
         if guardar and ruta:
             plt.savefig(ruta, bbox_inches="tight")        
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def graficar_comparacion_metricas(self, df_metricas):
@@ -311,6 +316,8 @@ class VisualizadorClusters:
         ruta = os.path.join(self.ruta_resultado,"comparacion_metricas.png")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)          
         plt.savefig(ruta, bbox_inches="tight")
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
         df_metricas = df_metricas.sort_values("score_combinado", ascending=False)
@@ -323,7 +330,8 @@ class VisualizadorClusters:
         ranking_df["calinski_Rank"] = ranking_df["calinski_harabasz"].rank(ascending=False).astype(int)
         ranking_df["davies_Rank"] = ranking_df["davies_bouldin"].rank(ascending=True).astype(int)
         final_ranking = ranking_df[['modelo',"silhouette_Rank","calinski_Rank","davies_Rank"]]
-        print(final_ranking)
+        if self.mostrarGrafico:
+            print(final_ranking)
 
     def graficar_boxplots_por_cluster(self):
         self.df_resultado.head(10)
@@ -333,6 +341,8 @@ class VisualizadorClusters:
             plt.suptitle("")
             plt.xlabel('cluster')
             plt.ylabel(col)
+            if not self.mostrarGrafico:
+                plt.close()
             plt.show()
 
     def graficar_evolucion_por_entidad(self):
@@ -359,6 +369,9 @@ class VisualizadorClusters:
 
         plt.suptitle("Evolución de Clusters por Entidad", fontsize=12)
         plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def resumen_clusters(self):
@@ -405,7 +418,7 @@ class VisualizadorClusters:
         # Generar resumen estadístico por entidad
         resumen = df_historico_cluster_actual.groupby("entidad").agg({
             "fecha": ["min", "max", "count"],
-            **{col: ["mean", "std", "min", "max"] for col in columnas_cluster}
+            **{col: ["mean", "std", "min", "max"] for col in self.columnas_cluster}
         })
 
         resumen.columns = ['_'.join(col).strip() for col in resumen.columns.values]

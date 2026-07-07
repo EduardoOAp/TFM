@@ -29,7 +29,8 @@ class OptimizadorPortafolioLiquido:
         self.resultados = {}
         self.agente = AGENTE_DIVERSIFICACION
         self.modulo = DIV_MODULO_OPTIMIZACION
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION)
         os.makedirs(self.ruta_resultado, exist_ok=True)    
@@ -146,13 +147,15 @@ class OptimizadorPortafolioLiquido:
         return resultados_entidades
     
 class VisualizadorOptimizacion:
-    def __init__(self, resultados: dict):
+    def __init__(self, resultados: dict, fecha: str, mostrarGrafico: bool = False):
         """
         resultados: diccionario con resultados por entidad
         """
         self.resultados = resultados
         self.df_resultados = self._construir_dataframe()
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION)
+        self.fechaTexto = fecha.replace("-", "")
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION, self.fechaTexto)
+        self.mostrarGrafico = mostrarGrafico        
 
     def _construir_dataframe(self) -> pd.DataFrame:
         filas = []
@@ -186,6 +189,8 @@ class VisualizadorOptimizacion:
         if guardar:
             os.makedirs(os.path.dirname(os.path.join(self.ruta_resultado,ruta)), exist_ok=True)
             plt.savefig(os.path.join(self.ruta_resultado,ruta), bbox_inches='tight')
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def mostrar_tabla(self):

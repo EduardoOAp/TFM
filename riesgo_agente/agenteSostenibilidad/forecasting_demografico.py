@@ -25,7 +25,8 @@ from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y
 
 
 class ForecastingDemografico:
-    def __init__(self, df: pd.DataFrame, columna_objetivo: str, columnas_exogenas: List[str], horizonte: int = 6):
+    def __init__(self, df: pd.DataFrame, columna_objetivo: str, 
+                 columnas_exogenas: List[str], horizonte: int = 6, mostrarGrafico : bool = False):
         self.df = df.dropna().copy()        
         self.columna_objetivo = columna_objetivo
         self.columnas_exogenas = columnas_exogenas
@@ -38,10 +39,12 @@ class ForecastingDemografico:
         self.agente = AGENTE_SOSTENIBILIDAD
         self.modulo = SOS_MODULO_FORECAST_DEMO
         self.resultado = []
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECAST_DEMO)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')                
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECAST_DEMO, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECAST_DEMO)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECAST_DEMO)
         os.makedirs(self.ruta_resultado, exist_ok=True)
+        self.mostrarGrafico = mostrarGrafico  
 
     def entrenar_holt_winters(self, df: pd.DataFrame) -> Dict:
         df = df.copy()
@@ -369,7 +372,9 @@ class ForecastingDemografico:
         plt.tight_layout()
         ruta = os.path.join(self.ruta_resultado,"comparacion_forecast.png")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)          
-        plt.savefig(ruta, bbox_inches="tight")        
+        plt.savefig(ruta, bbox_inches="tight")   
+        if not self.mostrarGrafico:
+            plt.close()                
         plt.show()
 
         # Guardar métricas

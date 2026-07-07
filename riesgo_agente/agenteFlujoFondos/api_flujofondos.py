@@ -8,8 +8,8 @@ app = FastAPI(
 
 print("API DE FLUJO DE FONDOS CARGADA CORRECTAMENTE")
 
-@app.post("/flujo_fondos")
-async def ejecutar_diversificacion(request: Request):
+@app.post("/flujofondos")
+async def ejecutar_flujoFondos(request: Request):
     required_keys = ["fondo", "entidad", "fecha"]
     for key in required_keys:
         if key not in payload:

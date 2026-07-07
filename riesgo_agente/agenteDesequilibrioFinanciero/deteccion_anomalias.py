@@ -38,7 +38,8 @@ class AnomaliaDetector:
         self.parametros = None
         self.score = None
         self.por_entidad = por_entidad
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS,self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS)
         self.agente = AGENTE_DESEQUILIBRIO
@@ -551,11 +552,14 @@ class AnomaliaDetector:
         return df_resultado if not top_n else df_resultado.head(top_n)
 
 class VisualizadorAnomalias:
-    def __init__(self, df_resultado, columnas_valores, por_entidad: bool = True):
+    def __init__(self, df_resultado, columnas_valores, por_entidad: bool = True, mostrarGrafico: bool = False):
         self.df = df_resultado.copy()
         self.columnas_valores = columnas_valores
         self.resultado = None
-        self.por_entidad = por_entidad  
+        self.por_entidad = por_entidad
+        self.mostrarGrafico = mostrarGrafico  
+        self.fechaTexto = pd.to_datetime(df_resultado['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS,self.fechaTexto)        
     """
     def ajusta_dataset(self, por_entidad = True):
         df1 = self.df
@@ -595,6 +599,11 @@ class VisualizadorAnomalias:
         handles, labels = plt.gca().get_legend_handles_labels()
         plt.legend(handles=handles, labels=["Normal", "Anómalo"], title="Anomalía")        
         plt.tight_layout()
+        ruta = os.path.join(self.ruta_resultado,"dispersion.png")
+        plt.savefig(ruta, bbox_inches="tight") 
+        
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def graficar_anomalias_temporales(self, entidad):
@@ -623,6 +632,10 @@ class VisualizadorAnomalias:
         plt.xticks(rotation=45)
         plt.legend()
         plt.tight_layout()
+        ruta = os.path.join(self.ruta_resultado,"anomaliasTemporales.png")
+        plt.savefig(ruta, bbox_inches="tight") 
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def graficar_anomalias_temporales_todas(self, altura_por_entidad=2):
@@ -672,6 +685,10 @@ class VisualizadorAnomalias:
 
         plt.xlabel("Fecha")
         plt.tight_layout()
+        ruta = os.path.join(self.ruta_resultado,"anomaliasTemporalesTodas.png")
+        plt.savefig(ruta, bbox_inches="tight") 
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def resumen_por_entidad(self):
@@ -697,7 +714,12 @@ class VisualizadorAnomalias:
         sns.heatmap(tabla, annot=True, fmt="d", cmap="Reds")
         plt.title("Frecuencia de anomalías por variable y entidad")
         plt.tight_layout()
+        ruta = os.path.join(self.ruta_resultado,"mapaCalor.png")
+        plt.savefig(ruta, bbox_inches="tight") 
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
+
 
     def graficar_top_drivers(self, df_drivers: pd.DataFrame, top_n: int = 10):
         df_top = df_drivers.head(top_n)
@@ -707,7 +729,12 @@ class VisualizadorAnomalias:
         plt.xlabel("Diferencia Absoluta de Media")
         plt.ylabel("Variable")
         plt.tight_layout()
-        plt.show()        
+        ruta = os.path.join(self.ruta_resultado,"topDrivers.png")
+        plt.savefig(ruta, bbox_inches="tight") 
+        if not self.mostrarGrafico:
+            plt.close()
+        plt.show()
+
 
 """
 # Ejemplo de uso:

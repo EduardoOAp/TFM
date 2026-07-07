@@ -37,7 +37,8 @@ class ForecastingActivoNeto:
         self.agente = AGENTE_DESEQUILIBRIO
         self.modulo = DES_MODULO_FORECASTING
         self.resultado = []
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING)
         os.makedirs(self.ruta_resultado, exist_ok=True)

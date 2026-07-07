@@ -8,8 +8,8 @@ app = FastAPI(
 
 print("API DE LIQUIDEZ CARGADA CORRECTAMENTE")
 
-@app.post("/liquidez")
-async def ejecutar_liquidez(request: Request):
+@app.post("/sostenibilidad")
+async def ejecutar_sostenibilidad(request: Request):
     required_keys = ["fondo", "entidad", "fecha"]
     for key in required_keys:
         if key not in payload:

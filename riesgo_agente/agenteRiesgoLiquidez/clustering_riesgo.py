@@ -14,12 +14,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 ###
 from riesgo_agente.utils.config import AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING 
 from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
-
 
 class ClusteringEvaluator:
     def __init__(self, df: pd.DataFrame, fondo: str, entidad: str, columnas: list, 
-                 usar_normalizado: bool = False):
+                 usar_normalizado: bool = False, mostrarGrafico: bool = False):
         self.df = df.dropna(subset=columnas).copy()
         self.fondo = fondo
         self.entidad = entidad
@@ -33,10 +31,13 @@ class ClusteringEvaluator:
         self.modulo = LIQ_MODULO_CLUSTERING
         self.usar_normalizado = usar_normalizado
         self.historial_scores = []  # Para acumulación si se usa score normalizado
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING)
-        os.makedirs(self.ruta_resultado, exist_ok=True)        
+        os.makedirs(self.ruta_resultado, exist_ok=True)   
+        self.resultado = []
+        self.mostrarGrafico = mostrarGrafico
 
 # Evaluación de múltiples métodos de clustering con puntuación combinada
 
@@ -154,8 +155,7 @@ class ClusteringEvaluator:
         :return: DataFrame ordenado por score_combinado (descendente).
         """
         from sklearn.preprocessing import MinMaxScaler
-
-        os.makedirs(os.path.dirname(ruta_salida), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.join(self.ruta_resultado, ruta_salida)), exist_ok=True)
 
         # Convertir resultados a DataFrame
         df = pd.DataFrame([
@@ -276,14 +276,22 @@ class ClusteringEvaluator:
         df_resultado = self.df.copy()
         df_resultado["cluster"] = self.mejor_modelo[1]["etiquetas"]
         df_resultado.to_csv(os.path.join(self.ruta_resultado, f"resultados_{self.fondo.replace(' ', '_')}.csv"), index=False)
+        visualizador = VisualizadorClusters(
+            df_resultado, self.columnas, self.fechaTexto, False
+        )
+        visualizador.graficar_dispersion(guardar=True)
+        df_scores = self._score_normalizado_global()
+        visualizador.graficar_comparacion_metricas(df_scores)
+        visualizador.graficar_evolucion_por_entidad()         
         #self.resultado = df_resultado.to_dict(orient="records")
         self.resultado = ["Se ejecutó clustering de liquidez"]
 
 class VisualizadorClusters:
-    def __init__(self, df_resultado, columnas_cluster):
+    def __init__(self, df_resultado, columnas_cluster, fechaTexto, mostrarGrafico: bool = False):
         self.df_resultado = df_resultado.copy()
         self.columnas_cluster = columnas_cluster
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING)        
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING, fechaTexto)
+        self.mostrarGrafico = mostrarGrafico
 
     def graficar_dispersion(self, guardar=False):
         plt.figure(figsize=(10, 6))
@@ -293,6 +301,8 @@ class VisualizadorClusters:
         ruta = os.path.join(self.ruta_resultado,"dispersion.png")
         if guardar and ruta:
             plt.savefig(ruta, bbox_inches="tight")   
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def graficar_comparacion_metricas(self, df_metricas):
@@ -310,8 +320,10 @@ class VisualizadorClusters:
         plt.tight_layout()
         ruta = os.path.join(self.ruta_resultado,"comparacion_metricas.png")
         plt.savefig(ruta, bbox_inches="tight")
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
-        plt.show()
+
 
         df_metricas = df_metricas.sort_values("score_combinado", ascending=False)
         ruta = os.path.join(self.ruta_resultado,"metricas_modelos.csv")
@@ -322,7 +334,8 @@ class VisualizadorClusters:
         ranking_df["calinski_Rank"] = ranking_df["calinski_harabasz"].rank(ascending=False).astype(int)
         ranking_df["davies_Rank"] = ranking_df["davies_bouldin"].rank(ascending=True).astype(int)
         final_ranking = ranking_df[['modelo',"silhouette_Rank","calinski_Rank","davies_Rank"]]
-        print(final_ranking)
+        if self.mostrarGrafico:
+            print(final_ranking)
 
 
     """

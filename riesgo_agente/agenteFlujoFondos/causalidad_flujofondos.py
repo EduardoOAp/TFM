@@ -20,13 +20,15 @@ class CausalidadEvaluator:
         self.max_lag = max_lag
         self.agente = AGENTE_FLUJOS
         self.modulo = FLU_MODULO_RELACION
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_RELACION)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_RELACION, self.fechaTexto)
         os.makedirs(self.ruta_resultado, exist_ok=True)
+        self.resultado = []
 
     def _analizar_entidad(self, df_entidad: pd.DataFrame, entidad: str):
         df_entidad = df_entidad.dropna(subset=self.columnas).copy()
         if df_entidad.empty or df_entidad.shape[0] < 30:
-            print(f"⚠️ Entidad {entidad} no tiene suficientes datos. Se omite.")
+            print(f"Entidad {entidad} no tiene suficientes datos. Se omite.")
             return
 
         # Correlaciones
@@ -85,7 +87,7 @@ class CausalidadEvaluator:
                 print(f"Error en regresión {entidad} → {y}: {e}")
             
             from riesgo_agente.agenteFlujoFondos.causalidad_flujofondos import VisualizadorCausalidad
-            vis = VisualizadorCausalidad(resultados_correlacion, resultados_granger, entidad=entidad)
+            vis = VisualizadorCausalidad(resultados_correlacion, resultados_granger, self.fechaTexto, entidad=entidad, mostrarGrafico=False)
             vis.graficar_heatmap_correlacion()
             vis.graficar_granger_mas_significativas()
             vis.tabla_rankings()    
@@ -93,7 +95,6 @@ class CausalidadEvaluator:
         if resumen_reg:
             df_resumen = pd.DataFrame(resumen_reg).sort_values("r2_ajustado", ascending=False)
             df_resumen.to_csv(os.path.join(self.ruta_resultado, f"ranking_regresiones_{self.fondo}_{entidad}.csv"), index=False)
-        
 
     def ejecutar_regresion_multivariante(self, variable_objetivo: str, variables_explicativas: list):
         df_modelo = self.df.dropna(subset=[variable_objetivo] + variables_explicativas).copy()
@@ -196,16 +197,19 @@ class CausalidadEvaluator:
             else:
                 df_entidad = self.df_original[self.df_original["entidad"] == entidad]
 
-            print(f"\n▶️ Procesando entidad: {entidad}")
+            print(f"\n Procesando entidad: {entidad}")
             self._analizar_entidad(df_entidad, entidad=entidad)
+        self.resultado = ["Se ejecutó causalidad de desequilibrio financiero"]
 
 class VisualizadorCausalidad:
-    def __init__(self, resultados_correlacion: dict, resultados_granger: dict, entidad: str = "global"):
+    def __init__(self, resultados_correlacion: dict, resultados_granger: dict, fecha: str, entidad: str = "global", mostrarGrafico: bool = False):
         self.corr = resultados_correlacion
         self.granger = resultados_granger
         self.entidad = entidad
-        self.ruta_salida = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_RELACION, entidad)
+        self.fecha = fecha.replace("-", "")
+        self.ruta_salida = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_RELACION, fecha, entidad)
         os.makedirs(self.ruta_salida, exist_ok=True)    
+        self.mostrarGrafico = mostrarGrafico
 
     def _formato_df_correlacion(self):
         return pd.DataFrame.from_dict(self.corr, orient="index").reset_index().rename(
@@ -250,6 +254,8 @@ class VisualizadorCausalidad:
 
         plt.tight_layout()
         plt.savefig(os.path.join(self.ruta_salida, "correlacion_heatmap.png"))
+        if not self.mostrarGrafico:
+            plt.close()
         plt.close()
 
     def graficar_granger_mas_significativas(self, umbral=0.05):
@@ -267,6 +273,8 @@ class VisualizadorCausalidad:
         plt.title(f"Relaciones causales significativas – {self.entidad} (p < {umbral})")
         plt.tight_layout()
         plt.savefig(os.path.join(self.ruta_salida, "granger_significativas.png"))
+        if not self.mostrarGrafico:
+            plt.close()
         plt.close()
 
     def tabla_rankings(self, top_n=10):

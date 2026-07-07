@@ -31,7 +31,8 @@ from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y
 #warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 class ForecastingDeficit:
-    def __init__(self, df: pd.DataFrame, columna_objetivo: str, columnas_exogenas: List[str], horizonte: int = 6):
+    def __init__(self, df: pd.DataFrame, columna_objetivo: str, columnas_exogenas: List[str], 
+                 horizonte: int = 6, mostrarGrafico : bool = False):
         self.df = df.dropna().copy()        
         self.columna_objetivo = columna_objetivo
         self.columnas_exogenas = columnas_exogenas
@@ -44,10 +45,12 @@ class ForecastingDeficit:
         self.agente = AGENTE_SOSTENIBILIDAD
         self.modulo = SOS_MODULO_FORECASTING
         self.resultado = []
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECASTING)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')        
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECASTING, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECASTING)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECASTING)
         os.makedirs(self.ruta_resultado, exist_ok=True)
+        self.mostrarGrafico = mostrarGrafico        
 
     def entrenar_holt_winters(self, df: pd.DataFrame) -> Dict:
         df = df.copy()
@@ -153,7 +156,6 @@ class ForecastingDeficit:
         self.resultados['multivariado'] = resultado
         return resultado
 
-    
     @staticmethod
     def forecast_con_teacher_forcing(model, serie_scaled, ventana: int, horizonte: int, reales_future_scaled: np.ndarray = None):
         """
@@ -387,6 +389,8 @@ class ForecastingDeficit:
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
+        if not self.mostrarGrafico:
+            plt.close()  
         plt.show()        
 
     def graficar_forecasts(self, df_historico, resultados, guardar_csv=True):
@@ -437,7 +441,9 @@ class ForecastingDeficit:
         plt.tight_layout()
         ruta = os.path.join(self.ruta_resultado,"comparacion_forecast.png")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)          
-        plt.savefig(ruta, bbox_inches="tight")        
+        plt.savefig(ruta, bbox_inches="tight")  
+        if not self.mostrarGrafico:
+            plt.close()                
         plt.show()
 
         # Guardar métricas

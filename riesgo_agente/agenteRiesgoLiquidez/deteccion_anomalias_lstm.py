@@ -38,7 +38,8 @@ class LSTMAnomalyDetector:
         self.modulo = LIQ_MODULO_ANOMALIAS
         self.columnas_numericas = self.df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
         self.mejor_modelo = None
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_ANOMALIAS)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_ANOMALIAS, self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_ANOMALIAS)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_ANOMALIAS)
         os.makedirs(self.ruta_resultado, exist_ok=True)           

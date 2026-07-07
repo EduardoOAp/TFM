@@ -16,8 +16,14 @@ def ejecutar_subagente_sostenibilidad(payload: dict):
     columnas = columnas_validas(df)
 
     # 2. Ejecutar Clustering
-    clustering = ClusteringEvaluator(df, fondo=fondo, entidad=entidad, columnas=columnas,
-                                     usar_normalizado=usar_normalizado)
+    columnas_cluster = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
+
+    clustering = ClusteringEvaluator(
+        df=df,
+        fondo=fondo, entidad=entidad,
+        columnas=columnas_cluster,
+        usar_normalizado=usar_normalizado, mostrarGrafico=False
+    )    
     clustering.ejecutar()
 
     # 3. Ejecutar Forecstating deficit
@@ -25,13 +31,26 @@ def ejecutar_subagente_sostenibilidad(payload: dict):
     df = cargar_dataframe_temporal(AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECASTING, fecha, data_root=DATA_ROOT)
     df = filtrar_entidades_con_historia(df)    
 
-    forecastDeficit = ForecastingDeficit(df, fondo=fondo, entidad=entidad, columnas=columnas)
+    columna_objetivo="indice_equilibrio_financiero"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()
+
+    forecastDeficit = ForecastingDeficit(df=df,
+        columna_objetivo=columna_objetivo,
+        columnas_exogenas=columnas_usar,mostrarGrafico=False
+    )
     forecastDeficit.ejecutar()
 
     # 4. Ejecutar Forecasting demografico
     df = cargar_dataframe_temporal(AGENTE_SOSTENIBILIDAD, SOS_MODULO_FORECAST_DEMO, fecha, data_root=DATA_ROOT)
-    df = filtrar_entidades_con_historia(df)      
-    forecastDemog = ForecastingDemografico(df, fondo=fondo, entidad=entidad, columnas=columnas)
+    df = filtrar_entidades_con_historia(df)   
+
+    columna_objetivo="aportantes_59_anios"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()
+
+    forecastDemog = ForecastingDemografico(df=df,
+        columna_objetivo=columna_objetivo,
+        columnas_exogenas=columnas_usar, mostrarGrafico=False
+    )
     forecastDemog.ejecutar()
 
     # 5. Armar resultado si se requiere

@@ -1,0 +1,142 @@
+{
+  "alpha_jensen": {
+    "operador": "<",
+    "valor": 0.0
+  },
+  "beta": {
+    "operador": "<",
+    "valor": 1.2
+  },
+  "concentracion_activos": {
+    "operador": ">",
+    "valor": 0.5
+  },
+  "distribucion_afiliados_entidad_fondo": {
+    "operador": ">",
+    "valor": 0.3
+  },
+  "indice_diversificacion_shannon": {
+    "operador": "<",
+    "valor": 1.0
+  },
+  "diversificacion_y_riesgo": {
+    "operador": ">",
+    "valor": 0.75
+  },
+  "flujo_neto_afiliados_fondosFondos": {
+    "operador": "<",
+    "valor": 0.0
+  },
+  "flujo_neto_afiliados_fondosMontos": {
+    "operador": "<",
+    "valor": -0.05
+  },
+  "herfindahl_hirschman_externo": {
+    "operador": "<=",
+    "valor": 0.1
+  },
+  "herfindahl_hirschman_local": {
+    "operador": "<=",
+    "valor": 0.1
+  },
+  "indice_carga_administrativa": {
+    "operador": ">",
+    "valor": 1.5
+  },
+  "indice_envejecimiento": {
+    "operador": ">",
+    "valor": 60.0
+  },
+  "indice_equilibrio_financiero": {
+    "operador": "<",
+    "valor": 0.95
+  },
+  "indice_liquidez_portafolio": {
+    "operador": "<",
+    "valor": 0.3
+  },
+  "indice_sostenibilidad_financiera": {
+    "operador": "<",
+    "valor": 0.7
+  },
+  "indice_sostenibilidad_pensiones": {
+    "operador": "<",
+    "valor": 0.7
+  },
+  "proporcion_pensionados_afiliados": {
+    "operador": ">",
+    "valor": 0.35
+  },
+  "rango_mensual_valorcuota": {
+    "operador": ">",
+    "valor": 0.02
+  },
+  "rentabilidad_acumulada_mes": {
+    "operador": "<",
+    "valor": -0.03
+  },
+  "rentabilidad_ajustada_comision": {
+    "operador": "<",
+    "valor": -0.02
+  },
+  "indice_riesgo_liquidez": {
+    "operador": ">",
+    "valor": 0.7
+  },
+  "sharpe_ratio": {
+    "operador": "<",
+    "valor": 1.0
+  },
+  "tasa_aportacion": {
+    "operador": "<",
+    "valor": 0.85
+  },
+  "tasa_captacion_afiliados": {
+    "operador": "<",
+    "valor": 0.005
+  },
+  "tasa_captacion_afiliados_lt": {
+    "operador": ">",
+    "valor": 0.001
+  },
+  "tasa_crecimiento_aportantes": {
+    "operador": "<",
+    "valor": 0.0
+  },
+  "tasa_crecimiento_pensionados": {
+    "operador": ">",
+    "valor": 0.03
+  },
+  "tasa_crecimiento_rentabilidad": {
+    "operador": "<",
+    "valor": 0.01
+  },
+  "tasa_fuga_afiliados": {
+    "operador": ">",
+    "valor": 0.02
+  },
+  "variacion_activo_neto": {
+    "operador": "<",
+    "valor": -0.05
+  },
+  "volatilidad_valorcuota_30d": {
+    "operador": ">",
+    "valor": 2.0
+  },
+  "volatilidad_reciente_activo_neto": {
+    "operador": ">",
+    "valor": 1.5
+  },
+  "rentabilidad_diaria": {
+    "operador": "<",
+    "valor": -0.01
+  },
+  "IndicadorRentabilidadDiaria_Media": {
+    "operador": "<",
+    "valor": -0.01
+  },
+  "IndicadorRentabilidadDiaria_Varianza": {
+    "operador": ">",
+    "valor": 0.02 
+  }
+}

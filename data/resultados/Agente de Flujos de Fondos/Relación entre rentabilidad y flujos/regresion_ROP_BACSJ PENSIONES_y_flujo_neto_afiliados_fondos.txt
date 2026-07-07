@@ -1,0 +1,34 @@
+                                 OLS Regression Results                                
+=======================================================================================
+Dep. Variable:     flujo_neto_afiliados_fondos   R-squared:                       0.628
+Model:                                     OLS   Adj. R-squared:                  0.606
+Method:                          Least Squares   F-statistic:                     28.71
+Date:                         Wed, 25 Jun 2025   Prob (F-statistic):           8.97e-26
+Time:                                 16:05:22   Log-Likelihood:                 200.33
+No. Observations:                          145   AIC:                            -382.7
+Df Residuals:                              136   BIC:                            -355.9
+Df Model:                                    8                                         
+Covariance Type:                     nonrobust                                         
+=================================================================================================
+                                    coef    std err          t      P>|t|      [0.025      0.975]
+-------------------------------------------------------------------------------------------------
+const                             0.0607      0.080      0.761      0.448      -0.097       0.219
+comision_saldo                   -0.0839      0.054     -1.561      0.121      -0.190       0.022
+rango_mensual_valorcuota          0.0001   8.06e-05      1.720      0.088   -2.07e-05       0.000
+rentabilidad_acumulada_mes        0.0126      0.005      2.686      0.008       0.003       0.022
+rentabilidad_real_anual          -0.0004      0.001     -0.420      0.675      -0.002       0.002
+sharpe_ratio                      0.0037      0.002      1.936      0.055   -7.96e-05       0.008
+tasa_captacion_afiliados_lt       0.3732      0.074      5.073      0.000       0.228       0.519
+tasa_crecimiento_rentabilidad   1.55e-05   1.89e-05      0.819      0.414   -2.19e-05    5.29e-05
+valor_cuota_promedio          -1.849e-06      9e-06     -0.205      0.838   -1.97e-05     1.6e-05
+==============================================================================
+Omnibus:                       34.397   Durbin-Watson:                   1.118
+Prob(Omnibus):                  0.000   Jarque-Bera (JB):               84.263
+Skew:                           0.954   Prob(JB):                     5.04e-19
+Kurtosis:                       6.210   Cond. No.                     1.60e+05
+==============================================================================
+
+Notes:
+[1] Standard Errors assume that the covariance matrix of the errors is correctly specified.
+[2] The condition number is large, 1.6e+05. This might indicate that there are
+strong multicollinearity or other numerical problems.
