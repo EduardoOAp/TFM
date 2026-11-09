@@ -1,0 +1,80 @@
+[
+{
+  "subagente": "Agente de Sostenibilidad",
+  "modulo": "Forecasting de déficit financiero",
+  "indicadores": [
+    "indice_sostenibilidad_financiera",
+    "rentabilidad_ajustada_comision",
+    "indice_equilibrio_financiero",
+    "tasa_aportacion",
+    "variacion_activo_neto",
+    "rentabilidad_acumulada_mes",
+    "tasa_crecimiento_aportantes",
+    "tasa_crecimiento_pensionados"
+  ],
+  "series": [
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "salario_o_aporte_colones",
+          "alias": "salario_promedio",
+          "funcion": "promedio"
+        },
+        {
+          "columna_valor": "aportantes",
+          "alias": "aportantes_totales",
+          "funcion": "suma"
+        }
+      ]
+    },
+    {
+      "parquet": "beneficio",
+      "columnas": [
+        {
+          "columna_valor": "beneficiocolones",
+          "alias": "beneficio_promedio",
+          "funcion": "promedio"
+        },
+        {
+          "columna_valor": "beneficio",
+          "alias": "beneficios_totales",
+          "funcion": "suma"
+        }
+      ]
+    },
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "ingresos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "INGRESO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "gastos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "GASTO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    }
+  ]
+}
+]
+
+
