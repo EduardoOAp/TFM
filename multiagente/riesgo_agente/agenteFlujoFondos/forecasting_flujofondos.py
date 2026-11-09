@@ -1,403 +1,694 @@
-import os
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+"""Pronóstico mensual de la tasa de salida de afiliados por entidad.
 
+Conserva la interfaz pública de ForecastingFlujoFondos y amplía a siete
+algoritmos. La validación simula pronósticos de horizonte completo
+sobre orígenes históricos comunes. No utiliza variables exógenas futuras no
+conocidas; el modelo Gradient Boosting utiliza rezagos de la tasa y
+variables de calendario conocidas en el futuro.
+"""
+import os
+os.environ.setdefault('TF_ENABLE_ONEDNN_OPTS', '0')
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+
+import csv
+import itertools
 import pickle
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Input, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
-import matplotlib.pyplot as plt
-from typing import Dict, List, Any
 import warnings
+from pathlib import Path
+from typing import Dict, List, Any
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from matplotlib.ticker import FuncFormatter
 from statsmodels.tools.sm_exceptions import ConvergenceWarning
-from riesgo_agente.utils.config import AGENTE_FLUJOS, FLU_MODULO_FORECASTING
-from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT,MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
+## Quitar esta dos lineas despues de pruebas
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+###
+
+from riesgo_agente.utils.config import (
+    AGENTE_FLUJOS, FLU_MODULO_FORECASTING,
+    DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT,
+)
+
+from riesgo_agente.utils.helpers import unir_serie_y_predicciones
 #warnings.filterwarnings("ignore", category=UserWarning)
 #warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-
 class ForecastingFlujoFondos:
-    def __init__(self, df: pd.DataFrame, columna_objetivo: str, 
+    def __init__(self, df: pd.DataFrame, columna_objetivo: str,
                  columnas_exogenas: List[str], horizonte: int = 6,
+                 divisor_visualizacion: float = 1_000_000.0, meses_grafico: int = 24,
+                 max_candidatos_arima: int = 12, max_candidatos_sarima: int = 16,
                  mostrarGrafico: bool = False):
-        self.df = df.dropna().copy()        
+        if horizonte < 1:
+            raise ValueError('El horizonte debe ser positivo.')
+        for col in ('fecha', 'entidad', columna_objetivo):
+            if col not in df.columns:
+                raise ValueError(f'Falta la columna obligatoria: {col}')
+        self.df = df.copy()
+        self.mostrarGrafico = bool(mostrarGrafico)
         self.columna_objetivo = columna_objetivo
-        self.columnas_exogenas = columnas_exogenas
+        self.columnas_exogenas = list(columnas_exogenas)
+        self.horizonte = horizonte
+        if not np.isfinite(divisor_visualizacion) or divisor_visualizacion <= 0:
+            raise ValueError('divisor_visualizacion debe ser positivo y finito.')
+        if meses_grafico < 1:
+            raise ValueError('meses_grafico debe ser positivo.')
+        self.divisor_visualizacion = float(divisor_visualizacion)
+        self.meses_grafico = int(meses_grafico)
+        if max_candidatos_arima < 1 or max_candidatos_sarima < 1:
+            raise ValueError('Los límites de candidatos deben ser positivos.')
+        self.max_candidatos_arima = int(max_candidatos_arima)
+        self.max_candidatos_sarima = int(max_candidatos_sarima)
+        self.busquedas_parametros = []
+        self.diagnosticos_residuos = []
+        self._entidad_actual = '' 
+        self.modelo_naive = None
+        self.modelo_promedio = None
+        self.modelo_arima = None
+        self.modelo_sarima = None
         self.modelo_holt = None
         self.modelo_multivariado = None
         self.modelo_lstm = None
-        self.horizonte = horizonte
-        self.scaler = None
         self.resultados = {}
+        self.resultado = []
         self.agente = AGENTE_FLUJOS
         self.modulo = FLU_MODULO_FORECASTING
-        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
-        self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_FORECASTING)
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_FLUJOS, FLU_MODULO_FORECASTING, self.fechaTexto)
-        self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_FLUJOS, FLU_MODULO_FORECASTING)        
-        self.resultado = []
+        fechas = pd.to_datetime(df['fecha'], errors='coerce').dropna()
+        if fechas.empty:
+            raise ValueError('No hay fechas válidas en el conjunto de datos.')
+        self.fechaTexto = fechas.max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, self.agente,
+                                           self.modulo, self.fechaTexto)
+        self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, self.agente, self.modulo)
+        self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, self.agente, self.modulo)
         os.makedirs(self.ruta_resultado, exist_ok=True)
-        self.mostrarGrafico = mostrarGrafico
+        self._modelos_entidad = {}
 
-    def entrenar_holt_winters(self, df: pd.DataFrame) -> Dict:
-        df = df.copy()
-        df = df.sort_values("fecha").dropna(subset=["fecha"])  # asegura orden y fechas válidas
-        # Asignar índice temporal y frecuencia fija (asumiendo datos mensuales)
-        df = df.set_index("fecha")
-        df.index = pd.date_range(start=df.index[0], periods=len(df), freq="ME")  # o freq="MS" si es inicio de mes
-        if not isinstance(df.index, pd.DatetimeIndex):
-            raise ValueError("El índice no es DatetimeIndex")
+    def _mensual(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Usa la tasa mensual ya calculada, sin sumar, promediar ni rellenar.
 
-        serie = df[self.columna_objetivo].dropna()
-        tscv = TimeSeriesSplit(n_splits=3)
-        errores = []
+        Cada entidad/mes debe tener un único valor; se admite una única fila
+        por mes, fechada en cualquier día, y se etiqueta como fin de mes.
+        """
+        data = df.copy()
+        data['fecha'] = pd.to_datetime(data['fecha'], errors='coerce')
+        data[self.columna_objetivo] = pd.to_numeric(data[self.columna_objetivo], errors='coerce')
+        data = data.dropna(subset=['fecha', 'entidad', self.columna_objetivo])
+        if data.empty:
+            raise ValueError('No hay tasas mensuales válidas.')
+        tasas = data[self.columna_objetivo]
+        if not np.isfinite(tasas).all() or ((tasas < 0) | (tasas > 100)).any():
+            raise ValueError('La tasa de salida debe estar entre 0 y 100 (%).')
+        data['mes'] = data['fecha'].dt.to_period('M')
+        duplicados = data.duplicated(['entidad', 'mes'], keep=False)
+        if duplicados.any():
+            ejemplos = data.loc[duplicados, ['entidad', 'mes']].drop_duplicates().head(5)
+            raise ValueError('Hay varias filas para la misma entidad y mes: '
+                             + ejemplos.astype(str).to_dict('records').__str__())
+        data['fecha'] = data['mes'].dt.to_timestamp(how='end').dt.normalize()
+        return data.drop(columns='mes').sort_values(['entidad', 'fecha']).reset_index(drop=True)
 
-        for train_idx, test_idx in tscv.split(serie):
-            train, test = serie.iloc[train_idx], serie.iloc[test_idx]
-            if len(train) < 2:
-                continue
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                modelo = ExponentialSmoothing(train, trend="add", seasonal=None).fit()
-                for warn in w:
-                    if issubclass(warn.category, ConvergenceWarning):
-                        print(f"[ConvergenceWarning] Fold con fechas {train.index[0]} - {train.index[-1]}")
+    def _serie(self, df: pd.DataFrame) -> pd.Series:
+        data = df.copy()
+        data['fecha'] = pd.to_datetime(data['fecha'], errors='coerce')
+        data = data.dropna(subset=['fecha', self.columna_objetivo]).sort_values('fecha')
+        serie = data.set_index('fecha')[self.columna_objetivo].astype(float)
+        serie = serie.groupby(serie.index.to_period('M')).last()
+        serie.index = serie.index.to_timestamp(how='end').normalize()
+        serie = serie.asfreq('ME')
+        if serie.isna().any():
+            faltantes = ', '.join(serie.index[serie.isna()].strftime('%Y-%m').tolist())
+            raise ValueError(f'Faltan observaciones mensuales ({faltantes}); revisar datos antes de entrenar.')
+        if len(serie) < max(12, self.horizonte * 2 + 2):
+            raise ValueError('Histórico mensual insuficiente para el horizonte solicitado.')
+        if not np.isfinite(serie.to_numpy()).all() or ((serie < 0) | (serie > 100)).any():
+            raise ValueError('La tasa de salida debe estar entre 0 y 100 (%).')
+        return serie
 
-            #modelo = ExponentialSmoothing(train, trend="add", seasonal=None).fit()
-            pred = modelo.forecast(steps=len(test))
-            errores.append(mean_squared_error(test, pred))
+    def _origenes(self, n: int):
+        # Máximo tres pruebas independientes de horizonte completo, sin solapamiento.
+        minimo = max(12, self.horizonte * 2 + 2)
+        posibles = list(range(minimo, n - self.horizonte + 1, self.horizonte))
+        return posibles[-3:]
 
-        modelo_final = ExponentialSmoothing(serie, trend="add", seasonal=None).fit()
-        pred_final = modelo_final.forecast(steps=self.horizonte)
-        fechas = pd.date_range(start=serie.index[-1] + pd.DateOffset(months=1), periods=self.horizonte, freq="ME")
-        pred_final.index = fechas
+    @staticmethod
+    def _limitar_tasa(predichos):
+        """Respeta el rango físico; se aplica también en el backtest."""
+        return np.clip(np.asarray(predichos, dtype=float), 0.0, 100.0)
 
-        self.modelo_holt = modelo_final
-        resultado = {
-            "modelo": "Holt-Winters",
-            "predicciones": pred_final.tolist(),
-            "inicio": str(pred_final.index[0].date()),
-            "fin": str(pred_final.index[-1].date()),
-            "mse": round(np.mean(errores), 4),
-            "splits": 3
+    @staticmethod
+    def _metricas(reales, predichos):
+        a, b = np.asarray(reales, float), np.clip(np.asarray(predichos, float), 0, 100)
+        if not len(a) or len(a) != len(b):
+            raise ValueError('No hay suficientes pares reales/predichos.')
+        mse = float(mean_squared_error(a, b))
+        return {
+            'mse': mse,
+            'rmse': float(np.sqrt(mse)),
+            'mae': float(mean_absolute_error(a, b)),
+            'r2': float(r2_score(a, b)) if len(a) > 1 else None,
+            'wape': float(100 * np.abs(a - b).sum() / np.abs(a).sum()) if np.abs(a).sum() else None,
         }
+
+    @staticmethod
+    def _holt_fit(serie):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ConvergenceWarning)
+            return ExponentialSmoothing(serie, trend='add', seasonal=None,
+                                        initialization_method='estimated').fit(optimized=True)
+
+    def _validar(self, serie, funcion):
+        origenes = self._origenes(len(serie))
+        if not origenes:
+            raise ValueError('Se necesitan más meses para validación temporal de seis pasos.')
+        reales, estimados = [], []
+        for origen in origenes:
+            pred = self._limitar_tasa(funcion(serie.iloc[:origen], self.horizonte)).reshape(-1)
+            if len(pred) != self.horizonte or not np.isfinite(pred).all():
+                raise ValueError('Pronóstico de validación incompleto o no finito.')
+            reales.extend(serie.iloc[origen:origen + self.horizonte].to_numpy())
+            estimados.extend(pred)
+        return {**self._metricas(reales, estimados), 'splits': len(origenes)}
+    
+    def entrenar_holt_winters(self, df: pd.DataFrame) -> Dict:
+        serie = self._serie(df)
+        metricas = self._validar(serie, lambda s, h: self._holt_fit(s).forecast(h))
+        modelo = self._holt_fit(serie)
+        self.modelo_holt = modelo
+        pred = modelo.forecast(self.horizonte)
+        resultado = self._resultado('Holt-Winters', serie, pred, metricas)
         self.resultados['holt_winters'] = resultado
         return resultado
 
+    # Referencias simples y modelos estadísticos, todos validados en los
+    # mismos orígenes y con el horizonte completo (6 meses por defecto).
+    @staticmethod
+    def _naive_predecir(serie, horizonte):
+        return np.repeat(float(serie.iloc[-1]), horizonte)
+
+    @staticmethod
+    def _promedio_predecir(serie, horizonte):
+        return np.repeat(float(serie.mean()), horizonte)
+
+    @staticmethod
+    def _ajustar_arima_sarima(serie, nombre, orden, estacional=(0, 0, 0, 0)):
+        """Ajuste tomado del módulo de valor cuota; periodicidad mensual."""
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', ConvergenceWarning)
+            if nombre == 'arima':
+                return ARIMA(serie, order=orden).fit()
+            return SARIMAX(serie, order=orden, seasonal_order=estacional,
+                           enforce_stationarity=False,
+                           enforce_invertibility=False).fit(disp=False, maxiter=100)
+
+    @staticmethod
+    def _diagnostico_residuos(modelo, estacional=0):
+        residuos = pd.Series(np.asarray(modelo.resid, dtype=float))
+        residuos = residuos.replace([np.inf, -np.inf], np.nan).dropna()
+        residuos = residuos.iloc[max(1, int(estacional)):]
+        if len(residuos) < 12:
+            return {'ljung_box_pvalor': np.nan, 'residuos_media': np.nan,
+                    'residuos_desviacion': np.nan, 'residuos_ruido_blanco_5pct': None}
+        lag = min(10, max(1, len(residuos) // 4))
+        prueba = acorr_ljungbox(residuos, lags=[lag], return_df=True)
+        pvalor = float(prueba['lb_pvalue'].iloc[-1])
+        return {'ljung_box_pvalor': pvalor,
+                'residuos_media': float(residuos.mean()),
+                'residuos_desviacion': float(residuos.std()),
+                'residuos_ruido_blanco_5pct': bool(pvalor >= 0.05)}
+
+    def _buscar_parametros(self, train, validacion, nombre, entidad='', origen='final'):
+        """Busca órdenes usando SOLO subentrenamiento y validación interna.
+
+        Se reutiliza la metodología del valor cuota (ADF, candidatos, AIC/BIC,
+        Ljung-Box y RMSE), con estacionalidad mensual m=12.
+        """
+        if len(train) < 14 or len(validacion) < 1:
+            raise ValueError('Histórico insuficiente para búsqueda de parámetros.')
+        try:
+            adf_p = float(adfuller(train, autolag='AIC')[1])
+        except (ValueError, np.linalg.LinAlgError):
+            adf_p = np.nan
+        ds = (0, 1) if np.isfinite(adf_p) and adf_p < 0.05 else (1, 0)
+        if nombre == 'arima':
+            candidatos = [(p, d, q, (0, 0, 0, 0)) for d in ds
+                          for p, q in itertools.product((0, 1, 2), repeat=2)]
+            limite = self.max_candidatos_arima
+        else:
+            # La estacionalidad anual requiere suficiente histórico.
+            estaciones = [(0, 0, 0, 0)]
+            if len(train) >= 36:
+                estaciones += [(P, D, Q, 12) for D in (0, 1)
+                               for P, Q in ((1, 0), (0, 1), (1, 1))]
+            candidatos = [(p, d, q, est) for est in estaciones for d in ds
+                          for p, q in ((0, 1), (1, 0), (1, 1), (0, 0))]
+            # Garantiza probar candidatos estacionales cuando hay datos.
+            if len(train) >= 36:
+                estacionales = [c for c in candidatos if c[3][3] == 12]
+                no_estacionales = [c for c in candidatos if c[3][3] == 0]
+                candidatos = [v for pareja in itertools.zip_longest(no_estacionales, estacionales)
+                              for v in pareja if v is not None]
+            limite = self.max_candidatos_sarima
+        mejor = None
+        for p, d, q, est in candidatos[:limite]:
+            fila = {'entidad': entidad, 'origen': origen, 'modelo': nombre,
+                    'p': p, 'd': d, 'q': q, 'P': est[0], 'D': est[1],
+                    'Q': est[2], 'm': est[3], 'adf_pvalor_entrenamiento': adf_p,
+                    'n_entrenamiento': len(train), 'n_validacion': len(validacion)}
+            try:
+                ajustado = self._ajustar_arima_sarima(train, nombre, (p, d, q), est)
+                pred = self._limitar_tasa(ajustado.forecast(len(validacion)))
+                if len(pred) != len(validacion) or not np.isfinite(pred).all():
+                    raise ValueError('Pronóstico no finito o incompleto')
+                convergio = bool(ajustado.mle_retvals.get('converged', True)) if hasattr(ajustado, 'mle_retvals') else True
+                mse = float(mean_squared_error(validacion, pred))
+                fila.update({'rmse_validacion': float(np.sqrt(mse)),
+                             'aic': float(ajustado.aic), 'bic': float(ajustado.bic),
+                             'convergio': convergio, 'error': ''})
+                fila.update(self._diagnostico_residuos(ajustado, est[3] or d))
+                if not convergio or not np.isfinite(mse):
+                    fila['error'] = 'No convergió o métrica no finita'
+                else:
+                    # Ruido blanco es un diagnóstico complementario, no veto rígido.
+                    puntaje = (np.sqrt(mse), float(ajustado.aic))
+                    if mejor is None or puntaje < mejor[0]:
+                        mejor = (puntaje, (p, d, q), est, fila.copy())
+            except (ValueError, TypeError, np.linalg.LinAlgError, ZeroDivisionError) as exc:
+                fila['error'] = str(exc)
+            self.busquedas_parametros.append(fila)
+        if mejor is None:
+            raise ValueError(f'No hubo candidatos convergentes para {nombre} ({entidad})')
+        return mejor[1], mejor[2], mejor[3]
+
+    def _pronostico_orden_automatico(self, serie, horizonte, nombre, origen):
+        # Separamos validación INTERNA del origen de backtesting (sin fuga).
+        n_val = min(self.horizonte, max(2, len(serie) // 5))
+        if len(serie) - n_val < 14:
+            raise ValueError('No hay histórico suficiente para búsqueda interna.')
+        subtrain, validacion = serie.iloc[:-n_val], serie.iloc[-n_val:]
+        orden, estacional, seleccion = self._buscar_parametros(
+            subtrain, validacion, nombre, self._entidad_actual, origen)
+        modelo = self._ajustar_arima_sarima(serie, nombre, orden, estacional)
+        if hasattr(modelo, 'mle_retvals') and not modelo.mle_retvals.get('converged', True):
+            raise ValueError(f'El ajuste final {nombre} no convergió')
+        pred = self._limitar_tasa(modelo.forecast(horizonte))
+        if not np.isfinite(pred).all():
+            raise ValueError('Predicciones no finitas')
+        return pred, modelo, orden, estacional, seleccion
+
+    def _entrenar_arima_sarima(self, df, nombre):
+        serie = self._serie(df)
+        self._entidad_actual = str(df['entidad'].iloc[0]) if 'entidad' in df.columns else ''
+        origenes = self._origenes(len(serie))
+        if not origenes:
+            raise ValueError('Histórico insuficiente para validación temporal.')
+        reales, estimados = [], []
+        for origen in origenes:
+            pronostico, _, _, _, _ = self._pronostico_orden_automatico(
+                serie.iloc[:origen], self.horizonte, nombre, f'backtest_{origen}')
+            reales.extend(serie.iloc[origen:origen + self.horizonte].to_numpy())
+            estimados.extend(self._limitar_tasa(pronostico))
+        metricas = {**self._metricas(reales, estimados), 'splits': len(origenes)}
+        pred, modelo, orden, estacional, seleccion = self._pronostico_orden_automatico(
+            serie, self.horizonte, nombre, 'final')
+        if nombre == 'arima':
+            self.modelo_arima = modelo
+        else:
+            self.modelo_sarima = modelo
+        resultado = self._resultado(nombre.upper(), serie, pred, metricas)
+        resultado.update({'orden': orden, 'orden_estacional': estacional,
+                          'aic': float(modelo.aic), 'bic': float(modelo.bic),
+                          'rmse_validacion_parametros': seleccion['rmse_validacion']})
+        diagnostico = self._diagnostico_residuos(modelo, estacional[3] or orden[1])
+        self.diagnosticos_residuos.append({
+            'entidad': self._entidad_actual, 'modelo': nombre,
+            'p': orden[0], 'd': orden[1], 'q': orden[2],
+            'P': estacional[0], 'D': estacional[1], 'Q': estacional[2], 'm': estacional[3],
+            'aic': float(modelo.aic), 'bic': float(modelo.bic), **diagnostico})
+        self.resultados[nombre] = resultado
+        return resultado
+
+    def entrenar_naive(self, df: pd.DataFrame) -> Dict:
+        serie = self._serie(df)
+        metricas = self._validar(serie, self._naive_predecir)
+        self.modelo_naive = {'ultimo_valor': float(serie.iloc[-1])}
+        resultado = self._resultado('Naive', serie,
+                                    self._naive_predecir(serie, self.horizonte), metricas)
+        self.resultados['naive'] = resultado
+        return resultado
+
+    def entrenar_promedio(self, df: pd.DataFrame) -> Dict:
+        serie = self._serie(df)
+        metricas = self._validar(serie, self._promedio_predecir)
+        self.modelo_promedio = {'media_historica': float(serie.mean())}
+        resultado = self._resultado('Promedio Histórico', serie,
+                                    self._promedio_predecir(serie, self.horizonte), metricas)
+        self.resultados['promedio'] = resultado
+        return resultado
+
+    def entrenar_arima(self, df: pd.DataFrame) -> Dict:
+        return self._entrenar_arima_sarima(df, 'arima')
+
+    def entrenar_sarima(self, df: pd.DataFrame) -> Dict:
+        return self._entrenar_arima_sarima(df, 'sarima')
+            
+    @staticmethod
+    def _features(serie, lags):
+        df = pd.DataFrame({'objetivo': serie})
+        for i in range(1, lags + 1):
+            df[f'lag_{i}'] = serie.shift(i)
+        df['mes_sin'] = np.sin(2 * np.pi * df.index.month / 12)
+        df['mes_cos'] = np.cos(2 * np.pi * df.index.month / 12)
+        return df.dropna()
+
+    def _gb_entrenar(self, serie):
+        lags = min(6, max(2, len(serie) // 4))
+        matriz = self._features(serie, lags)
+        if len(matriz) < 8:
+            raise ValueError('Datos insuficientes para Gradient Boosting.')
+        X = matriz.drop(columns='objetivo')
+        y = matriz['objetivo']
+        modelo = GradientBoostingRegressor(random_state=42, n_estimators=100,
+                                           max_depth=2, learning_rate=0.05)
+        modelo.fit(X, y)
+        return modelo, lags
+
+    def _gb_predecir(self, serie, horizonte, modelo=None, lags=None):
+        if modelo is None:
+            modelo, lags = self._gb_entrenar(serie)
+        valores = list(serie.to_numpy(dtype=float))
+        salida = []
+        for fecha in pd.date_range(serie.index[-1] + pd.offsets.MonthEnd(1),
+                                   periods=horizonte, freq='ME'):
+            features = {f'lag_{i}': valores[-i] for i in range(1, lags + 1)}
+            features['mes_sin'] = np.sin(2 * np.pi * fecha.month / 12)
+            features['mes_cos'] = np.cos(2 * np.pi * fecha.month / 12)
+            X = pd.DataFrame([features])[modelo.feature_names_in_]
+            estimado = float(modelo.predict(X)[0])
+            salida.append(estimado)
+            valores.append(estimado)
+        return salida
+    
     def entrenar_multivariado(self, df: pd.DataFrame) -> Dict:
-        df = df.copy()
-        df = df.dropna(subset=self.columnas_exogenas + [self.columna_objetivo])
-        df = df.sort_values("fecha")
-
-        # Variables para validación cruzada
-        X = df[self.columnas_exogenas].values
-        y = df[self.columna_objetivo].values
-
-        scaler = MinMaxScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        tscv = TimeSeriesSplit(n_splits=5)
-        predicciones_cv = []
-        reales_cv = []
-
-        for train_idx, test_idx in tscv.split(X):
-            X_train, X_test = X_scaled[train_idx], X_scaled[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-
-            modelo_cv = GradientBoostingRegressor(random_state=42)
-            modelo_cv.fit(X_train, y_train)
-            y_pred = modelo_cv.predict(X_test)
-
-            predicciones_cv.extend(y_pred)
-            reales_cv.extend(y_test)
-
-        mse = mean_squared_error(reales_cv, predicciones_cv)
-        r2 = r2_score(reales_cv, predicciones_cv)
-
-        # ENTRENAMIENTO FINAL PARA PREDICCIÓN FUTURA
-        modelo_final = GradientBoostingRegressor(random_state=42)
-        modelo_final.fit(X_scaled, y)
-        self.modelo_multivariado = modelo_final
-
-        # Predicción futura
-        ultimos = df.tail(self.horizonte)
-        if len(ultimos) < self.horizonte:
-            raise ValueError("No hay suficientes datos futuros para predicción multivariada.")
-
-        #X_future = ultimos[self.columnas_exogenas].values
-        X_future = scaler.transform(ultimos[self.columnas_exogenas].values)
-        y_pred_future = modelo_final.predict(X_future)
-        #fechas_future = ultimos["fecha"].values
-        fechas_future = pd.date_range(start=df["fecha"].max() + pd.DateOffset(months=1),
-                                    periods=self.horizonte, freq="ME")        
-
-        resultado = {
-            "modelo": "GradientBoostingRegressor",
-            "predicciones": y_pred_future.tolist(),
-            "inicio": str(pd.to_datetime(fechas_future[0]).date()),
-            "fin": str(pd.to_datetime(fechas_future[-1]).date()),
-            "mse": round(mse, 4),
-            "r2": round(r2, 4)
-        }
-
+        serie = self._serie(df)
+        # Sin escenarios exógenos futuros, no es válido utilizar valores reales
+        # de variables explicativas de los últimos meses como meses futuros.
+        metricas = self._validar(serie, self._gb_predecir)
+        modelo, lags = self._gb_entrenar(serie)
+        self.modelo_multivariado = {'modelo': modelo, 'lags': lags,
+                                   'columnas': list(modelo.feature_names_in_)}
+        pred = self._gb_predecir(serie, self.horizonte, modelo, lags)
+        resultado = self._resultado('GradientBoostingRegressor', serie, pred, metricas)
+        resultado['nota'] = ('Utiliza rezagos de la tasa y calendario; '
+                             'no utiliza exógenas futuras desconocidas.')
         self.resultados['multivariado'] = resultado
         return resultado
 
-    def entrenar_lstm(self, df: pd.DataFrame) -> Dict:
-        df = df.copy()
-        df = df.sort_values("fecha").set_index("fecha").asfreq("ME")
-        df = df[[self.columna_objetivo]].dropna()
-        if len(df) < 30:
-            self.resultados["lstm"] = {"error": "Datos insuficientes para entrenar LSTM"}
-            return
+    @staticmethod
+    def _lstm_dependencias():
+        from tensorflow.keras.models import Sequential
+        from tensorflow.keras.layers import LSTM, Dense, Input
+        from tensorflow.keras.callbacks import EarlyStopping
+        from sklearn.preprocessing import MinMaxScaler
+        import tensorflow as tf
+        return Sequential, LSTM, Dense, Input, EarlyStopping, MinMaxScaler, tf
 
+    def _lstm_entrenar(self, serie):
+        Sequential, LSTM, Dense, Input, EarlyStopping, MinMaxScaler, tf = self._lstm_dependencias()
+        tf.keras.utils.set_random_seed(42)
+        ventana = min(12, max(3, self.horizonte), len(serie) // 3)
         scaler = MinMaxScaler()
-        serie_scaled = scaler.fit_transform(df)
-
-        ventana = self.horizonte
+        valores = scaler.fit_transform(serie.to_numpy().reshape(-1, 1)).ravel()
         X, y = [], []
-        for i in range(ventana, len(serie_scaled)):
-            X.append(serie_scaled[i - ventana:i, 0])
-            y.append(serie_scaled[i, 0])
+        for i in range(ventana, len(valores)):
+            X.append(valores[i - ventana:i])
+            y.append(valores[i])
+        X = np.asarray(X).reshape(-1, ventana, 1)
+        y = np.asarray(y)
+        if len(X) < 12:
+            raise ValueError('Datos insuficientes para entrenar LSTM.')
+        corte = max(1, int(len(X) * 0.8))
+        if corte >= len(X):
+            raise ValueError('No hay datos suficientes para validación interna LSTM.')
+        modelo = Sequential([Input(shape=(ventana, 1)), LSTM(24), Dense(1)])
+        modelo.compile(optimizer='adam', loss='mse')
+        modelo.fit(X[:corte], y[:corte], validation_data=(X[corte:], y[corte:]),
+                   epochs=100, batch_size=8, shuffle=False, verbose=0,
+                   callbacks=[EarlyStopping(monitor='val_loss', patience=10,
+                                            restore_best_weights=True)])
+        # Ajuste final con todos los datos del origen de entrenamiento.
+        epocas = max(10, min(100, len(modelo.history.history.get('loss', []))))
+        final = Sequential([Input(shape=(ventana, 1)), LSTM(24), Dense(1)])
+        final.compile(optimizer='adam', loss='mse')
+        final.fit(X, y, epochs=epocas, batch_size=8, shuffle=False, verbose=0)
+        return final, scaler, ventana
 
-        X = np.array(X).reshape(-1, ventana, 1)
-        y = np.array(y)
-
-        tscv = TimeSeriesSplit(n_splits=3)
-        predicciones = []
-        reales = []
-
-        for train_idx, test_idx in tscv.split(X):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-
-            model = Sequential()
-            model.add(Input(shape=(ventana, 1)))
-            model.add(LSTM(50, activation="relu", return_sequences=False))
-            model.add(Dropout(0.2))
-            model.add(Dense(1))
-            model.compile(optimizer="adam", loss="mse")
-            model.fit(X_train, y_train, epochs=100, batch_size=8, verbose=0,
-                      validation_split=0.2,
-                      callbacks=[EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True)])
-
-            y_pred = model.predict(X_test, verbose=0).flatten()
-            predicciones.extend(y_pred)
-            reales.extend(y_test)
-
-        reales_orig = scaler.inverse_transform(np.array(reales).reshape(-1, 1)).flatten()
-        predicciones_orig = scaler.inverse_transform(np.array(predicciones).reshape(-1, 1)).flatten()
-
-        mse = mean_squared_error(reales_orig, predicciones_orig)
-        r2 = r2_score(reales_orig, predicciones_orig)
-
-        ultimos = serie_scaled[-ventana:].reshape(1, ventana, 1)
-        pred_scaled = []
-        for _ in range(self.horizonte):
-            pred = model.predict(ultimos, verbose=0)
-            pred_scaled.append(pred[0, 0])
-            ultimos = np.append(ultimos[:, 1:, :], pred.reshape(1, 1, 1), axis=1)
-
-        pred = scaler.inverse_transform(np.array(pred_scaled).reshape(-1, 1)).flatten()
-        fechas = pd.date_range(start=df.index[-1] + pd.DateOffset(months=1), periods=self.horizonte, freq="ME")
-
-        self.modelo_lstm = model
-        resultado = {
-            "modelo": "LSTM",
-            "predicciones": pred.tolist(),
-            "inicio": str(fechas[0].date()),
-            "fin": str(fechas[-1].date()),
-            "mse": round(mse, 4),
-            "r2": round(r2, 4)
-        }
+    def _lstm_predecir(self, serie, horizonte, entrenado=None):
+        modelo, scaler, ventana = entrenado or self._lstm_entrenar(serie)
+        valores = scaler.transform(serie.to_numpy().reshape(-1, 1)).ravel().tolist()
+        salida = []
+        for _ in range(horizonte):
+            X = np.asarray(valores[-ventana:]).reshape(1, ventana, 1)
+            siguiente = float(modelo.predict(X, verbose=0)[0, 0])
+            valores.append(siguiente)
+            salida.append(siguiente)
+        return scaler.inverse_transform(np.asarray(salida).reshape(-1, 1)).ravel().tolist()
+    
+    def entrenar_lstm(self, df: pd.DataFrame) -> Dict:
+        serie = self._serie(df)
+        metricas = self._validar(serie, self._lstm_predecir)
+        entrenado = self._lstm_entrenar(serie)
+        self.modelo_lstm = entrenado
+        pred = self._lstm_predecir(serie, self.horizonte, entrenado)
+        resultado = self._resultado('LSTM', serie, pred, metricas)
         self.resultados['lstm'] = resultado
         return resultado
 
-    def guardar_modelos(self, entidad: str, fondo: str):
-        os.makedirs(self.ruta_modelo, exist_ok=True)
-        #with open(f"{ruta_modelo}/{self.fondo}_modelo.pkl", "wb") as f:        
-        if self.modelo_holt:
-            with open(f"{self.ruta_modelo}/{fondo}_{entidad}_modelo.pkl", "wb") as f:
-                pickle.dump(self.modelo_holt, f)
-        if self.modelo_multivariado:
-            with open(f"{self.ruta_modelo}/{fondo}_{entidad}_modelo.pkl", "wb") as f:
-                pickle.dump(self.modelo_multivariado, f)
-        if self.modelo_lstm:
-            with open(f"{self.ruta_modelo}/{fondo}_{entidad}_modelo.pkl", "wb") as f:
-                pickle.dump(self.modelo_lstm, f)
-
-    def entrenar_por_entidad(self, df: pd.DataFrame, campo_entidad: str = "entidad", fondo: str = "ROP") -> Dict[str, Any]:
-        resultados_por_entidad = {}
-        entidades = df[campo_entidad].unique()
-
-        for entidad in entidades:
-            df_ent = df[df[campo_entidad] == entidad].copy()
-            if len(df_ent) < 10:
-                continue
-
-            try:
-                resultado_multi = self.entrenar_multivariado(df_ent)
-                resultado_lstm = self.entrenar_lstm(df_ent)
-                resultado_holt = self.entrenar_holt_winters(df_ent)                
-
-                self.guardar_modelos(entidad, fondo)
-
-                resultados_por_entidad[entidad] = {
-                    "holt_winters": resultado_holt,
-                    "multivariado": resultado_multi,
-                    "lstm": resultado_lstm
-                }
-            except Exception as e:
-                resultados_por_entidad[entidad] = {"error": str(e)}
-        rows = []
-        from datetime import datetime
-
-        for entidad, modelos in resultados_por_entidad.items():
-            for modelo_nombre, info in modelos.items():
-                print(f"info {info}")
-                fecha_inicio = datetime.strptime(info["inicio"], "%Y-%m-%d")
-                fechas_fin_mes = pd.date_range(start=fecha_inicio, periods=len(info["predicciones"]), freq="M")
-                for i, (pred, fecha) in enumerate(zip(info["predicciones"], fechas_fin_mes)):                
-                #for i, pred in enumerate(info["predicciones"]):
-                    #fecha = fecha_inicio + pd.Timedelta(days=i)
-                    rows.append({
-                        "entidad": entidad,
-                        "modelo": info["modelo"],
-                        "fecha": fecha,
-                        "prediccion": pred,
-                        "mae": info.get("mae"),                    
-                        "r2": info.get("r2")
-                    })
-
-        df_resultado = pd.DataFrame(rows)
-        ruta = os.path.join(self.ruta_resultado,"resultados.csv")
-        os.makedirs(self.ruta_resultado, exist_ok=True)
-        df_resultado.to_csv(ruta)
-        ### Borra luego arriba
-
-        return resultados_por_entidad
+    def _resultado(self, nombre, serie, pred, metricas):
+        fechas = pd.date_range(serie.index[-1] + pd.offsets.MonthEnd(1),
+                               periods=self.horizonte, freq='ME')
+        return {'modelo': nombre, 'predicciones': [float(v) for v in self._limitar_tasa(pred)],
+                'inicio': str(fechas[0].date()), 'fin': str(fechas[-1].date()),
+                **metricas}
     
-    def ejecutar(self):
-        df_completo = completar_fechas_mensuales(self.df)    
-        # Rellenar hacia adelante
-        df_completo = df_completo.sort_values(["entidad", "fecha"])
-        df_completo = df_completo.groupby("entidad", group_keys=False).apply(lambda g: g.ffill())
-        df_completo = df_completo.reset_index(drop=True) 
-        df = df_completo.copy()
-        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")  
-        # Verificar fechas faltantes por entidad
-        entidades = df["entidad"].unique()
+    def guardar_modelos(self, ruta_base: str, entidad: str, fondo: str):
+        ruta = Path(ruta_base) / self.agente / self.modulo
+        ruta.mkdir(parents=True, exist_ok=True)
+        etiqueta = f'{fondo}_{entidad}'.replace('/', '_').replace('\\', '_')
+        modelos = {'naive': self.modelo_naive,
+                   'promedio': self.modelo_promedio,
+                   'holt_winters': self.modelo_holt,
+                   'arima': self.modelo_arima,
+                   'sarima': self.modelo_sarima,
+                   'multivariado': self.modelo_multivariado}
+        for nombre, modelo in modelos.items():
+            if modelo is not None:
+                with open(ruta / f'{etiqueta}_{nombre}.pkl', 'wb') as archivo:
+                    pickle.dump(modelo, archivo)
+        if self.modelo_lstm is not None:
+            modelo, scaler, ventana = self.modelo_lstm
+            ruta_lstm = ruta / f'{etiqueta}_lstm.keras'
+            modelo.save(str(ruta_lstm))
+            with open(ruta / f'{etiqueta}_lstm_scaler.pkl', 'wb') as archivo:
+                pickle.dump({'scaler': scaler, 'ventana': ventana}, archivo)
 
-        for ent in entidades:
-            fechas_ent = df[df["entidad"] == ent]["fecha"].dropna().sort_values()
-            rango_completo = pd.date_range(start=fechas_ent.min(), end=fechas_ent.max(), freq="ME")
-            fechas_faltantes = sorted(set(rango_completo) - set(fechas_ent))
-
-            print(f"\n{ent}:")
-            print(f"  Rango: {fechas_ent.min().date()} → {fechas_ent.max().date()}")
-            print(f"  Fechas únicas registradas: {fechas_ent.nunique()}")
-            print(f"  Fechas faltantes ({len(fechas_faltantes)}): {[f.date() for f in fechas_faltantes]}")
-
-        ruta = os.path.join(self.ruta_resultado,"serie_datos.csv")
-        df.to_csv(ruta)
-
-        resultados = self.entrenar_por_entidad(df)
-        self.graficar_forecasts(df, resultados)
-        #print(resultados)
-        #self.resultado = self.resultados
-        ruta_salida = os.path.join(self.ruta_resultado,"comparacion_historia.csv")
-        ruta_serie = ruta
-        ruta_resultado = os.path.join(self.ruta_resultado,"resultados.csv")
-        unir_serie_y_predicciones(
-            path_serie=ruta_serie,
-            path_resultados=ruta_resultado,
-            columna_objetivo=self.columna_objetivo,
-            salida=ruta_salida
-        )  
-        self.resultado = ["Se ejecutó forecast de liquidez"]
-
+    def entrenar_por_entidad(self, df: pd.DataFrame, campo_entidad: str = 'entidad',
+                             fondo: str = 'ROP', ruta_modelos: str = None) -> Dict[str, Any]:
+        ruta_modelos = ruta_modelos or os.path.join(DATA_ROOT, MODELOS_ROOT)
+        resultados = {}
+        filas = []
+        resumen = []
+        for entidad, df_ent in df.groupby(campo_entidad, sort=False):
+            self.modelo_holt = self.modelo_multivariado = self.modelo_lstm = None
+            self.modelo_naive = self.modelo_promedio = None
+            self.modelo_arima = self.modelo_sarima = None
+            self.resultados = {}
+            predicciones = {}
+            errores = {}
+            for clave, metodo in [('naive', self.entrenar_naive),
+                                  ('promedio', self.entrenar_promedio),
+                                  ('holt_winters', self.entrenar_holt_winters),
+                                  ('arima', self.entrenar_arima),
+                                  ('sarima', self.entrenar_sarima),
+                                  ('multivariado', self.entrenar_multivariado),
+                                  ('lstm', self.entrenar_lstm)]:
+                try:
+                    predicciones[clave] = metodo(df_ent)
+                except Exception as exc:
+                    errores[clave] = str(exc)
+                    print(f'[{entidad}] {clave}: {exc}')
+            if not predicciones:
+                resultados[entidad] = {'error': 'Ningún modelo pudo entrenarse',
+                                       'errores_modelos': errores}
+                continue
+            mejor = min(predicciones, key=lambda m: predicciones[m]['rmse'])
+            resultados[entidad] = {**predicciones, 'mejor_modelo': mejor,
+                                   'errores_modelos': errores}
+            self._modelos_entidad[entidad] = resultados[entidad]
+            try:
+                self.guardar_modelos(ruta_modelos, str(entidad), fondo)
+            except Exception as exc:
+                resultados[entidad]['error_guardado'] = str(exc)
+            for clave, info in predicciones.items():
+                resumen.append({'entidad': entidad, 'modelo': clave,
+                                'mejor_modelo': clave == mejor,
+                                **{k: info.get(k) for k in ('mse', 'rmse', 'mae', 'r2', 'wape', 'splits')}})
+                fechas = pd.date_range(start=info['inicio'], periods=len(info['predicciones']), freq='ME')
+                for fecha, valor in zip(fechas, info['predicciones']):
+                    filas.append({'entidad': entidad, 'modelo': clave, 'fecha': fecha,
+                                  'prediccion': valor, 'seleccionado': clave == mejor,
+                                  **{k: info.get(k) for k in ('mse', 'rmse', 'mae', 'r2', 'wape')}})
+        pd.DataFrame(filas, columns=['entidad', 'modelo', 'fecha', 'prediccion',
+                                     'seleccionado', 'mse', 'rmse', 'mae', 'r2', 'wape']).to_csv(
+            os.path.join(self.ruta_resultado, 'resultados.csv'), index=False)
+        pd.DataFrame(resumen, columns=['entidad', 'modelo', 'mejor_modelo',
+                                       'mse', 'rmse', 'mae', 'r2', 'wape', 'splits']).to_csv(
+            os.path.join(self.ruta_resultado, 'metricas_forecast.csv'), index=False)
+        pd.DataFrame(self.busquedas_parametros).to_csv(
+            os.path.join(self.ruta_resultado, 'parametros_modelos.csv'), index=False)
+        pd.DataFrame(self.diagnosticos_residuos).to_csv(
+            os.path.join(self.ruta_resultado, 'diagnostico_residuos.csv'), index=False)
+        self.resultados_por_entidad = resultados
+        return resultados
+    
     def graficar_forecasts(self, df_historico, resultados, guardar_csv=True):
-        import csv
-        plt.figure(figsize=(14, 8))
-        metricas = []
+        """Gráficos por OPC, histórico reciente y siete pronósticos.
 
-        entidades = resultados.keys()
-        colores = plt.cm.tab10.colors  # Hasta 10 colores
+        El divisor afecta solamente el eje vertical: no altera los CSV,
+        predicciones ni las métricas calculadas en unidades originales.
+        """
+        escala = 1.0  # La tasa ya está expresada en porcentaje.
+        etiqueta_escala = ' (%)'
+        for entidad, info in resultados.items():
+            if 'error' in info:
+                continue
+            hist = df_historico[df_historico['entidad'] == entidad].copy()
+            hist['fecha'] = pd.to_datetime(hist['fecha'])
+            hist = hist.sort_values('fecha').tail(self.meses_grafico)
+            if hist.empty:
+                continue
+            fig, ax = plt.subplots(figsize=(13, 7))
+            ax.plot(hist['fecha'], hist[self.columna_objetivo].astype(float) / escala,
+                    label='Histórico (últimos meses)', color='#172554', linewidth=2.5)
+            colores = {'naive': '#64748b', 'promedio': '#a16207',
+                       'holt_winters': '#16a34a', 'arima': '#2563eb',
+                       'sarima': '#7c3aed', 'multivariado': '#ea580c',
+                       'lstm': '#dc2626'}
+            for clave in ('naive', 'promedio', 'holt_winters', 'arima',
+                          'sarima', 'multivariado', 'lstm'):
+                datos = info.get(clave)
+                if not isinstance(datos, dict) or 'predicciones' not in datos:
+                    continue
+                fechas = pd.date_range(datos['inicio'],
+                                       periods=len(datos['predicciones']), freq='ME')
+                ganador = clave == info.get('mejor_modelo')
+                etiqueta = f"{datos['modelo']} (RMSE={datos['rmse']:,.2f})"
+                if ganador:
+                    etiqueta = '★ ' + etiqueta
+                ax.plot(fechas, np.asarray(datos['predicciones'], float) / escala,
+                        marker='o', markersize=4, linestyle='--',
+                        color=colores[clave], linewidth=2.7 if ganador else 1.5,
+                        alpha=1 if ganador else .78, label=etiqueta)
+            ax.axvline(hist['fecha'].max(), color='gray', linestyle=':', alpha=.8)
+            ax.set_title(f'{self.columna_objetivo} — {entidad} | Mejor: {info["mejor_modelo"]}')
+            ax.set_xlabel('Fecha')
+            ax.set_ylabel(f'{self.columna_objetivo}{etiqueta_escala}')
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, pos: f'{v:,.2f}'))
+            ax.grid(alpha=.22)
+            ax.legend(loc='best', fontsize=8)
+            fig.autofmt_xdate()
+            fig.tight_layout()
+            nombre = str(entidad).replace('/', '_').replace('\\', '_')
+            fig.savefig(os.path.join(self.ruta_resultado, f'forecast_{nombre}.png'),
+                        dpi=160, bbox_inches='tight')
+            if self.mostrarGrafico:
+                plt.show()
+            plt.close(fig)
 
-        for i, entidad in enumerate(entidades):
-            df_ent = df_historico[df_historico["entidad"] == entidad].copy()
-            df_ent["fecha"] = pd.to_datetime(df_ent["fecha"])
-            df_ent = df_ent.sort_values("fecha")
+    def _graficar_comparacion(self, mensual, resultados):
+        """Gráfico conjunto de históricos y modelos seleccionados."""
+        fig, ax = plt.subplots(figsize=(14, 8))
+        trazado = False
+        for entidad, info in resultados.items():
+            if 'error' in info:
+                continue
+            hist = mensual[mensual['entidad'] == entidad].sort_values('fecha')
+            if hist.empty:
+                continue
+            linea, = ax.plot(hist['fecha'], hist[self.columna_objetivo],
+                             label=f'{entidad} — histórico', linewidth=1.5)
+            ganador = info.get('mejor_modelo')
+            datos = info.get(ganador, {})
+            if 'predicciones' in datos:
+                fechas = pd.date_range(datos['inicio'], periods=len(datos['predicciones']), freq='ME')
+                ax.plot(fechas, datos['predicciones'], linestyle='--', marker='o',
+                        color=linea.get_color(), label=f'{entidad} — {ganador}')
+            trazado = True
+        if trazado:
+            ax.set_title('Tasa de salida de afiliados — comparación por entidad')
+            ax.set_xlabel('Fecha')
+            ax.set_ylabel('Tasa de salida (%)')
+            ax.set_ylim(bottom=0, top=max(1, ax.get_ylim()[1]))
+            ax.grid(alpha=.25)
+            ax.legend(fontsize=8)
+            fig.autofmt_xdate()
+            fig.tight_layout()
+            fig.savefig(os.path.join(self.ruta_resultado, 'comparacion_forecast.png'),
+                        dpi=160, bbox_inches='tight')
+            if self.mostrarGrafico:
+                plt.show()
+        plt.close(fig)
 
-            # Color único por entidad
-            color = colores[i % len(colores)]
+    def ejecutar(self):
+        mensual = self._mensual(self.df)
+        mensual = mensual.sort_values(['entidad', 'fecha']).reset_index(drop=True)
+        ruta_serie = os.path.join(self.ruta_resultado, 'serie_datos.csv')
+        mensual.to_csv(ruta_serie, index=False)
+        resultados = self.entrenar_por_entidad(mensual)
+        self.graficar_forecasts(mensual, resultados)
+        self._graficar_comparacion(mensual, resultados)
+        ruta_resultados = os.path.join(self.ruta_resultado, 'resultados.csv')
+        if os.path.getsize(ruta_resultados) > 0 and pd.read_csv(ruta_resultados).shape[0] > 0:
+            try:
+                unir_serie_y_predicciones(
+                    path_serie=ruta_serie, path_resultados=ruta_resultados,
+                    columna_objetivo=self.columna_objetivo,
+                    salida=os.path.join(self.ruta_resultado, 'comparacion_historia.csv'))
+            except Exception as exc:
+                warnings.warn(f'No se pudo generar comparacion_historia.csv: {exc}')
+        self.resultado = ['Se ejecutó forecast mensual de tasa de salida de afiliados']
+        return resultados
 
-            # Serie histórica
-            plt.plot(df_ent["fecha"], df_ent[self.columna_objetivo], label=f"{entidad} - Hist", color=color, linewidth=1.2)
-
-            # Holt-Winters
-            hw = resultados[entidad].get("holt_winters")
-            if hw:
-                fechas_hw = pd.date_range(start=hw["inicio"], periods=len(hw["predicciones"]), freq="ME")
-                plt.plot(fechas_hw, hw["predicciones"], linestyle="--", color=color, alpha=0.6, label=f"{entidad} - HW")
-                metricas.append([entidad, "Holt-Winters", hw.get("mse", None), None, hw.get("splits", None)])
-
-            # LSTM
-            lstm = resultados[entidad].get("lstm")
-            if lstm:
-                fechas_lstm = pd.date_range(start=lstm["inicio"], periods=len(lstm["predicciones"]), freq="ME")
-                plt.plot(fechas_lstm, lstm["predicciones"], linestyle="dotted", color=color, alpha=0.6, label=f"{entidad} - LSTM")
-                metricas.append([entidad, "LSTM", lstm.get("mse", None), lstm.get("r2", None), lstm.get("splits", None)])
-
-            # Multivariado
-            mv = resultados[entidad].get("multivariado")
-            if mv:
-                fechas_mv = pd.date_range(start=mv["inicio"], periods=len(mv["predicciones"]), freq="ME")
-                metricas.append([entidad, "GradientBoosting", mv.get("mse", None), mv.get("r2", None), mv.get("splits", None)])
-                plt.plot(fechas_mv, mv["predicciones"], linestyle="dashdot", color=color, alpha=0.6, label=f"{entidad} - GB")
-
-        plt.title(f"Forecast de {self.columna_objetivo} para todas las entidades")
-        plt.xlabel("Fecha")
-        plt.ylabel(self.columna_objetivo)
-        plt.legend(loc="upper left", fontsize=8)
-        plt.grid(True)
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"comparacion_forecast.png")
-        os.makedirs(os.path.dirname(ruta), exist_ok=True)          
-        plt.savefig(ruta, bbox_inches="tight")    
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
-
-       # Guardar métricas
-        if guardar_csv:   
-            ruta = os.path.join(self.ruta_resultado,"metricas_forecast_deficit.csv")        
-            with open(ruta, mode="w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["entidad", "modelo", "mse", "r2", "splits"])
-                writer.writerows(metricas)
 """
 if __name__ == "__main__":
+    from pathlib import Path
+    import traceback    
     DATA_ROOT = "data"     
-    agente = "Agente de Riesgo de Liquidez"
-    modulo = "Forecasting de liquidez activo neto"
-    fecha = "2024-12-31"
+    agente = "Agente de Flujos de Fondos"
+    modulo = "Forecasting de fuga de afiliados"
+    fecha = "2026-08-31"
     ruta = os.path.join(DATA_ROOT, "temporal", agente, modulo, fecha+".parquet")
     df = pd.read_parquet(ruta)
 
     df = df[df.groupby("entidad")["fecha"].transform("nunique") > 24].copy()
-    df_completo = completar_fechas_mensuales(df)    
+
     # Rellenar hacia adelante
-    df_completo = df_completo.sort_values(["entidad", "fecha"])
-    df_completo = df_completo.groupby("entidad", group_keys=False).apply(lambda g: g.ffill())
+    df_completo = df.sort_values(["entidad", "fecha"])
+    columnas_rellenar = df_completo.columns.difference(["entidad"])
+
+    df_completo[columnas_rellenar] = (
+    df_completo.groupby("entidad")[columnas_rellenar].ffill()
+    )
     df_completo = df_completo.reset_index(drop=True) 
     df = df_completo.copy()
     df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
@@ -420,22 +711,71 @@ if __name__ == "__main__":
         print(f"  Fechas faltantes ({len(fechas_faltantes)}): {[f.date() for f in fechas_faltantes]}")
 
     columnas_cluster = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()    
-    #df["variacion_activo_neto"] = pd.to_numeric(df["variacion_activo_neto"], errors="coerce")
-    #print(f"nulo {df["variacion_activo_neto"].isna().sum()}")
     pd.set_option("display.max_columns", None)
     pd.set_option("display.width", 1000)    
     #print(df.head(10))
     #print(df.dtypes)
     # Definir columnas excluyendo entidad, fondo y fecha
-    columna_objetivo="monto_activo_neto"
-    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha","monto_activo_neto"]).tolist()
+    columna_objetivo="tasa_fuga_afiliados"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha","tasa_fuga_afiliados"]).tolist()
 
-    modelo = ForecastingLiquidez(
+    modelo = ForecastingFlujoFondos(
+        df=df,
         columna_objetivo=columna_objetivo,
-        columnas_exogenas=columnas_usar, agente=agente, modulo=modulo
+        columnas_exogenas=columnas_usar,
+        horizonte=6,
     )
-    resultados = modelo.entrenar_por_entidad(df)
-    graficar_forecasts(df, resultados, columna_objetivo)
-    print(resultados)
+    
+    # Ejecutar el proceso completo
+    try:
+        resultados = modelo.ejecutar()
+
+        ruta = Path(modelo.ruta_resultado).resolve()
+
+        print("\n" + "=" * 70)
+        print("DIAGNÓSTICO DE GRÁFICOS")
+        print("=" * 70)
+
+        print(f"Ruta de resultados: {ruta}")
+        print(f"Directorio existe: {ruta.exists()}")
+
+        graficos = list(ruta.glob("forecast_*.png"))
+
+        print(f"Gráficos encontrados: {len(graficos)}")
+
+        for grafico in graficos:
+            print(f"  {grafico.name}")
+
+        print("\nResultados por entidad:")
+
+        for entidad, info in resultados.items():
+            if "error" in info:
+                print(f"  {entidad}: ERROR - {info['error']}")
+            else:
+                print(
+                    f"  {entidad}: "
+                    f"Mejor modelo = {info.get('mejor_modelo')}"
+                )
+
+        if not graficos:
+            print("\nIntentando generar nuevamente los gráficos...")
+
+            df_mensual = modelo._mensual(modelo.df)
+
+            modelo.graficar_forecasts(
+                df_mensual,
+                resultados
+            )
+
+            nuevos = list(ruta.glob("forecast_*.png"))
+            print(f"Gráficos después del reintento: {len(nuevos)}")
+
+    except Exception:
+        print("\nERROR DURANTE LA EJECUCIÓN:")
+        traceback.print_exc()
+
+    # Mostrar resultados
+    print("\nResultados del forecasting:")
+    print(modelo.resultados)
 
 """

@@ -78,6 +78,13 @@ def construir_matrices_transferencias(df: pd.DataFrame):
             })
 
     df_transferencias = pd.DataFrame(registros) 
+
+    if df_transferencias.empty:
+        print("El DataFrame de transferencias no tiene datos.")
+        # Retorna dos DataFrames vacíos con las columnas esperadas para mantener la estructura
+        columnas_esperadas = ["entidad_origen", "entidad_destino", "cantidad", "monto"]
+        return pd.DataFrame(columns=columnas_esperadas), pd.DataFrame(columns=columnas_esperadas)
+        
     matriz_cant = df_transferencias.pivot_table(
         index="entidad_origen", columns="entidad_destino", values="cantidad", aggfunc="sum", fill_value=0
     )
@@ -139,18 +146,19 @@ class SupenDataFetcher:
             print(f"[DEBUG] Llamando a URL SUPEN: {self.url}")
             response = requests.get(self.url)
             response.raise_for_status()
-            data = response.json()            
+            data = response.json()      
+            df = pd.DataFrame(data)  
+            pd.set_option("display.max_columns", None)
+            pd.set_option("display.width", None)                   
             if self.tipo == "libre_transferencia":
                 #if "datos" not in data:
                 #    raise ValueError("Respuesta JSON inválida: falta 'datos'")
                 #df = pd.DataFrame(data["datos"])
-                df = pd.DataFrame(data)  
-                pd.set_option("display.max_columns", None)
-                pd.set_option("display.width", None)                 
+                if df.empty:
+                    return pd.DataFrame()                                
                 print(df.head(10))
                 df = transformar_libre_transferencia(df)  
-            else:
-                df = pd.DataFrame(data)
+
             return df
         except requests.RequestException as e:
             raise HTTPException(status_code=500, detail=f"Error al acceder a la API de SUPEN: {str(e)}")

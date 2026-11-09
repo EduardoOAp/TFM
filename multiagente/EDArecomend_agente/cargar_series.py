@@ -5,17 +5,19 @@ from glob import glob
 from datetime import datetime
 from .config import PATH_SERIES, PATH_INDICADORES, JSON_PATH, UMBRAL_JSON_PATH
 from .utils import procesar_columna, evaluar_umbral
+from configuracion.cargar_json import cargar_config
 
 def cargar_series_desde_json(columnas_comunes=["entidad", "fondo", "fecha"], 
                              fecha_inicio=None, fecha_fin=None, agente=None, modulo=None, 
                              func_recomendar_columnas=None):
-    json_path = os.path.join(os.path.dirname(__file__), JSON_PATH)
 
-    if not os.path.exists(json_path):
-        raise FileNotFoundError(f"Archivo no encontrado: {JSON_PATH}")
 
-    with open(json_path, "r", encoding="utf-8") as f:
-        estructura = json.load(f)
+    estructura = cargar_config(JSON_PATH)
+    #if not os.path.exists(json_path):
+    #    raise FileNotFoundError(f"Archivo no encontrado: {JSON_PATH}")
+
+    #with open(json_path, "r", encoding="utf-8") as f:
+    #   estructura = json.load(f)
 
     resultados = {}
     #rutas_fechas = glob(os.path.join(carpeta_indicadores, "*", "*", "*", "*", "indicadores.parquet"))
@@ -110,15 +112,72 @@ def cargar_series_desde_json(columnas_comunes=["entidad", "fondo", "fecha"],
                     #print(df_base.head(10))                
 
                     for col_def in columnas:
+                        #print('[BORRAR-columnas] ', columnas)
                         df_col = procesar_columna(df_base, columnas_comunes, parquet, col_def)
-                        if df_col is not None:
+                        #if 'optimiza' in modulo.lower():
+                        #    print('[BORRAR-columnas] ', df_col)
+                        if df_col is not None and not df_col.empty:                         
+                            #if not 'optimiza' in modulo.lower():
                             df_col["__source__"] = f"{parquet}-{col_def.get('columna_valor', '')}"
+                            #if 'optimiza' in modulo.lower():
+                            #    print('[BORRAR-columnas] ', df_col) 
                             dfs.append(df_col)
                 except Exception as e:
                     print(f"[ERROR] Fallo al leer {ruta_parquet}: {e}")
-        
-        #print("Fechas series ",sorted(dfs["fecha"].unique()))
-            # Procesar indicadores
+
+        """
+        if 'optimiza' in modulo.lower():
+            if not dfs:
+                print("La lista de DataFrames está vacía. No hay datos para procesar.")
+                df_final_prueba = pd.DataFrame()
+            else:
+                # Paso 1: Crear un DataFrame esqueleto con todas las combinaciones de las claves
+                entidades = pd.concat([df['entidad'] for df in dfs]).unique()
+                fechas = pd.concat([df['fecha'] for df in dfs]).unique()
+                fondos = pd.concat([df['fondo'] for df in dfs]).unique()
+                
+                esqueleto = pd.DataFrame({
+                    'entidad': pd.Series(entidades).repeat(len(fechas) * len(fondos)),
+                    'fondo': pd.Series(fondos).repeat(len(fechas)).tolist() * len(entidades),
+                    'fecha': pd.Series(fechas).tolist() * len(entidades) * len(fondos)
+                })
+
+                esqueleto = esqueleto.sort_values(by=['entidad', 'fondo', 'fecha']).reset_index(drop=True)
+                
+                # Paso 2: Iterar y fusionar todos los DataFrames con el esqueleto
+                df_final_prueba = esqueleto.copy()
+                for df_col in dfs:
+                    # Identifica la columna de valor en el DataFrame actual (df_col)
+                    columnas_a_fusionar = [col for col in df_col.columns if col not in ['entidad', 'fondo', 'fecha', '__source__']]
+                    
+                    # Asegúrate de que solo haya una columna de valor
+                    if len(columnas_a_fusionar) == 1:
+                        columna_valor_a_unir = columnas_a_fusionar[0]
+
+                        # Si la columna ya existe en df_final_prueba, la eliminamos de df_col
+                        if columna_valor_a_unir in df_final_prueba.columns:
+                            # En lugar de eliminar, simplemente no se fusiona de nuevo
+                            continue
+                    
+                    # Eliminar la columna '__source__' si existe
+                    if "__source__" in df_col.columns:
+                        df_col = df_col.drop(columns=["__source__"])
+                    
+                    # Unir con el esqueleto usando un left merge
+                    # y especificando sufijos para evitar cualquier conflicto
+                    df_final_prueba = pd.merge(
+                        df_final_prueba,
+                        df_col,
+                        on=['entidad', 'fondo', 'fecha'],
+                        how='left',
+                        suffixes=('', '_nuevo') # Sufijos personalizados para evitar conflictos
+                    )
+
+            print(df_final_prueba.tail(120))
+        """            
+        #print("Fechas series ",sorted(dfs["fecha"].unique())) 
+            
+        # Procesar indicadores
         ruta_glob_ind = os.path.join(PATH_INDICADORES, "*", "*", "*", "*", "indicadores.parquet")
         indicadores_validos = []
         for path_indicador in glob(ruta_glob_ind):
@@ -140,6 +199,8 @@ def cargar_series_desde_json(columnas_comunes=["entidad", "fondo", "fecha"],
                 df_ind = pd.read_parquet(path_indicador)
                 if "fecha" in df_ind.columns:
                     df_ind["fecha"] = pd.to_datetime(df_ind["fecha"]).dt.date
+
+                    
                 # Filtrar solo los indicadores relevantes
                 pd.set_option("display.max_columns", None)
                 pd.set_option("display.width", 1000)
@@ -212,14 +273,25 @@ def cargar_series_desde_json(columnas_comunes=["entidad", "fondo", "fecha"],
             pd.set_option("display.width", 1000)
             #print(df_combinado.head(10))
             #print(sorted(df_combinado["fecha"].unique()))
-            df_filtrado = df_combinado.dropna()
+            df_filtrado = df_combinado.fillna(dict.fromkeys(df_combinado.select_dtypes(include='number').columns, 0)).dropna()
+            df_filtrado["fecha"] = pd.to_datetime(df_filtrado["fecha"])           
+            # Aqui es donde se debería filtrar si los datos son solo para fin de mes 
+            # o pueden ser diarios, recuerden si se mezclan datos diarios y de fin de mes
+            # se rellenan muchos con 0
+            # Filtrar los registros de fin de mes
+            if modulo != "Forecasting Financiero valor cuota":
+                print(df_filtrado['fecha'].dtype)
+                #print(df_filtrado['fecha'].head())                
+                df_filtrado = df_filtrado[df_filtrado['fecha'].dt.is_month_end].copy()
+            
             ruta_guardado = os.path.join(
                 "data", "temporal", f"{agente}_{modulo}_{fecha_fin_dt:%Y-%m-%d}.csv"
             )
             os.makedirs(os.path.dirname(ruta_guardado), exist_ok=True)
             if os.path.exists(ruta_guardado):
                 os.remove(ruta_guardado)                
-            df_filtrado.to_csv(ruta_guardado, index=False)            
+            df_filtrado.to_csv(ruta_guardado, index=False)
+           
         #print("Fechas df_filtrado ",sorted(df_filtrado["fecha"].unique()))
         ruta_guardado = None
 

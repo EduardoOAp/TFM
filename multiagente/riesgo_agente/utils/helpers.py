@@ -1,9 +1,10 @@
 import os
 import pandas as pd
 from datetime import datetime
-from riesgo_agente.utils.config import TEMPORAL_ROOT
+from ..utils.config import TEMPORAL_ROOT
 
 def cargar_dataframe_temporal(agente: str, modulo: str, fecha: str, data_root: str = "data"):
+    #ruta = os.path.join("multiagente",data_root, TEMPORAL_ROOT, agente, modulo, f"{fecha}.parquet")
     ruta = os.path.join(data_root, TEMPORAL_ROOT, agente, modulo, f"{fecha}.parquet")
     if not os.path.exists(ruta):
         raise FileNotFoundError(f"No se encontró el archivo: {ruta}")
@@ -12,7 +13,7 @@ def cargar_dataframe_temporal(agente: str, modulo: str, fecha: str, data_root: s
     df["fecha"] = pd.to_datetime(df["fecha"])
     return df
 
-def filtrar_entidades_con_historia(df: pd.DataFrame, min_periodos: int = 24) -> pd.DataFrame:
+def filtrar_entidades_con_historia(df: pd.DataFrame, min_periodos: int = 36) -> pd.DataFrame:
     return df[df.groupby("entidad")["fecha"].transform("nunique") > min_periodos].copy()
 
 def columnas_validas(df: pd.DataFrame) -> list:

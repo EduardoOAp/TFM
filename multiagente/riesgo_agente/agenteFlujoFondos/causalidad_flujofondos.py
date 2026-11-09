@@ -30,7 +30,7 @@ class CausalidadEvaluator:
         if df_entidad.empty or df_entidad.shape[0] < 30:
             print(f"Entidad {entidad} no tiene suficientes datos. Se omite.")
             return
-
+        print("Entidad",entidad)
         # Correlaciones
         resultados_correlacion = {}
         for i in range(len(self.columnas)):
@@ -197,7 +197,7 @@ class CausalidadEvaluator:
             else:
                 df_entidad = self.df_original[self.df_original["entidad"] == entidad]
 
-            print(f"\n Procesando entidad: {entidad}")
+            #print(f"\n Procesando entidad: {entidad}")
             self._analizar_entidad(df_entidad, entidad=entidad)
         self.resultado = ["Se ejecutó causalidad de desequilibrio financiero"]
 
@@ -260,6 +260,11 @@ class VisualizadorCausalidad:
 
     def graficar_granger_mas_significativas(self, umbral=0.05):
         df_granger = self._formato_df_granger_minimo()
+        if "p_valor" not in df_granger.columns:
+            print("⚠️ Advertencia: la columna 'p_valor' no está en df_granger.")
+            print("Columnas disponibles:", df_granger.columns)
+            return  # o manejar el error como corresponda
+        
         df_filtrado = df_granger[df_granger["p_valor"] < umbral].sort_values("p_valor")
 
         if df_filtrado.empty:
@@ -280,9 +285,9 @@ class VisualizadorCausalidad:
     def tabla_rankings(self, top_n=10):
         df_corr = self._formato_df_correlacion().copy()
         df_corr["abs_correlacion"] = df_corr["correlacion"].abs()
-        print("\nTop correlaciones absolutas:")
-        print(df_corr.sort_values("abs_correlacion", ascending=False).head(top_n)[["variables", "correlacion", "p_valor"]])
+        #0rint("\nTop correlaciones absolutas:")
+        #print(df_corr.sort_values("abs_correlacion", ascending=False).head(top_n)[["variables", "correlacion", "p_valor"]])
 
         df_granger = self._formato_df_granger_minimo()
-        print("\nRelaciones causales más significativas (Granger):")
-        print(df_granger.sort_values("p_valor").head(top_n))    
+        #print("\nRelaciones causales más significativas (Granger):")
+        #print(df_granger.sort_values("p_valor").head(top_n))    

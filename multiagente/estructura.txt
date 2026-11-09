@@ -1,0 +1,51 @@
+Listado de rutas de carpetas para el volumen Datos
+El n£mero de serie del volumen es DCD2-D15D
+D:.
+³   Carga_app2.bat
+³   estructura.txt
+³   main.py
+³   requirements.txt
+³   __init__.py
+³   
+ÀÄÄÄmultiagente
+    ³   Carga_app2.bat
+    ³   orquestador - copia.py
+    ³   orquestador.py
+    ³   __init__.py
+    ³   
+    ÃÄÄÄprocesamiento_agente
+    ³   ³   api_procesamiento.py
+    ³   ³   logica_procesamiento.py
+    ³   ³   utils.py
+    ³   ³   __init__.py
+    ³   ³   
+    ³   ÃÄÄÄIndicadores
+    ³   ³       indicadores_captacion.py
+    ³   ³       indicadores_demograficos.py
+    ³   ³       indicadores_dinamicos.py
+    ³   ³       indicadores_financieros.py
+    ³   ³       indicadores_misc.py
+    ³   ³       indicadores_riesgo.py
+    ³   ³       indicadores_sostenibilidad.py
+    ³   ³       __init__.py
+    ³   ³       
+    ³   ÀÄÄÄ__pycache__
+    ³           api_procesamiento.cpython-312.pyc
+    ³           logica_procesamiento.cpython-312.pyc
+    ³           utils.cpython-312.pyc
+    ³           __init__.cpython-312.pyc
+    ³           
+    ÃÄÄÄscraper_agente
+    ³   ³   api_scraper.py
+    ³   ³   scraper_agente.py
+    ³   ³   __init__.py
+    ³   ³   
+    ³   ÀÄÄÄ__pycache__
+    ³           api_scraper.cpython-312.pyc
+    ³           scraper_agente.cpython-312.pyc
+    ³           __init__.cpython-312.pyc
+    ³           
+    ÀÄÄÄ__pycache__
+            orquestador.cpython-312.pyc
+            __init__.cpython-312.pyc
+            

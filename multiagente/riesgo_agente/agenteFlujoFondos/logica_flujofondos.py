@@ -4,6 +4,7 @@ from riesgo_agente.agenteFlujoFondos.clustering_flujofondos import ClusteringEva
 from riesgo_agente.agenteFlujoFondos.clustering_flujofondos import VisualizadorClusters
 from riesgo_agente.agenteFlujoFondos.forecasting_flujofondos import ForecastingFlujoFondos
 from riesgo_agente.agenteFlujoFondos.causalidad_flujofondos import CausalidadEvaluator
+from configuracion.devuelveObjetivo import seleccionar_columnas_objetivo_desde_json
 
 def ejecutar_subagente_flujofondos(payload: dict):
     fondo = payload["fondo"]
@@ -45,12 +46,14 @@ def ejecutar_subagente_flujofondos(payload: dict):
     # 3. Ejecutar Forecasting
     # 1. Cargar y preparar el DataFrame
     df = cargar_dataframe_temporal(AGENTE_FLUJOS, FLU_MODULO_FORECASTING, fecha, data_root=DATA_ROOT)
-    df = filtrar_entidades_con_historia(df)    
-    columna_objetivo="tasa_fuga_afiliados"
-    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()    
+    df = filtrar_entidades_con_historia(df) #, min_periodos = 24*30)  
+    columna_objetivo = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_FLUJOS, FLU_MODULO_FORECASTING, df.columns, 1)
+    #columna_objetivo="tasa_fuga_afiliados"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]+columna_objetivo).tolist()
     
     forecasting = ForecastingFlujoFondos(df=df,
-        columna_objetivo=columna_objetivo,
+        columna_objetivo=columna_objetivo[0],
         columnas_exogenas=columnas_usar, mostrarGrafico=False
     )
     forecasting.ejecutar()
@@ -58,7 +61,7 @@ def ejecutar_subagente_flujofondos(payload: dict):
     # 3. Ejecutar Causalidad
     # 1. Cargar y preparar el DataFrame
     df = cargar_dataframe_temporal(AGENTE_FLUJOS, FLU_MODULO_RELACION, fecha, data_root=DATA_ROOT)
-    df = filtrar_entidades_con_historia(df)  
+    df = filtrar_entidades_con_historia(df) #, min_periodos=24*30)  
 
     columnas_cluster = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()  
     

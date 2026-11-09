@@ -1,6 +1,14 @@
 # Directorios que no deben subirse a GitHub
-data/
-eda_resultados/
+multiagente_respaldo/
+Datos_ant/
+multiagente.worktrees/
+__pycache__/
+
 
 # Archivos Python que comienzan con prueba
-prueba*.py
+prueba*.svg
+*.pbix
+
+
+# otros
+*.py[cod]

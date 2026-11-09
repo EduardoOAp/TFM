@@ -1,0 +1,6 @@
+# Directorios que no deben subirse a GitHub
+data/
+eda_resultados/
+
+# Archivos Python que comienzan con prueba
+prueba*.py

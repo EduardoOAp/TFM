@@ -1,6 +1,6 @@
 from . import IndicadorBase
 import pandas as pd
-from procesamiento_agente.utils import get_parametro_indicador
+from ..utils import get_parametro_indicador
 """
 IndicadorIndiceLiquidezPortafolio
 IndicadorRiesgoLiquidez
@@ -39,6 +39,7 @@ class IndicadorRangoMensualValorCuota(IndicadorBase):
             ventana_indicador = pd.Timedelta(days=30)
             fecha_dt = pd.to_datetime(fecha)
             inicio_ventana = fecha_dt - ventana_indicador
+            
            
             df = df[
                 (df["entidad"] == entidad) &
@@ -50,16 +51,22 @@ class IndicadorRangoMensualValorCuota(IndicadorBase):
             
             if df.empty:
                 return None
+            print(fecha_dt, ' ',inicio_ventana, ' ', len(df))
             if len(df) < ventana_indicador.days:
-                print(f"no hay suficientes días del dataset {self.nombre}")
-                return None  # o retornar un valor como 0, dependiendo de cómo quieras manejar este caso                        
-
+                if fecha_dt.month == 2:
+                    if (len(df) < ventana_indicador.days-2):
+                        print(f"no hay suficientes días del dataset {self.nombre} Febrero")
+                        return None  # o retornar un valor como 0, dependiendo de cómo quieras manejar este caso
+                else:
+                    print(f"no hay suficientes días del dataset {self.nombre}")
+                    return None  # o retornar un valor como 0, dependiendo de cómo quieras manejar este caso
+                    
             df["fecha"] = pd.to_datetime(df["fecha"])
             df = df.set_index("fecha").sort_index()
 
-            if pd.Series(df.index.date).nunique() < ventana_indicador.days:
-                print(f"[INFO] {self.nombre}: solo {df.index.date.nunique()} días disponibles.")
-                return None
+            #if (pd.Series(df.index.date).nunique() < ventana_indicador.days):
+            #    print(f"[INFO] {self.nombre}: solo {df.index.date.nunique()} días disponibles.")
+            #    return None
             #print(round(df["montocolones"].max() - df["montocolones"].min(), 4))
             return round(df["montocolones"].max() - df["montocolones"].min(), 4)
         except Exception as e:

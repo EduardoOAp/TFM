@@ -1,1 +1,0 @@
-from .scraper_agente import SupenScraper

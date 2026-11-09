@@ -1,9 +1,10 @@
-from riesgo_agente.utils.helpers import cargar_dataframe_temporal, filtrar_entidades_con_historia, columnas_validas
-from riesgo_agente.utils.config import DATA_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING, LIQ_MODULO_ANOMALIAS, LIQ_MODULO_FORECASTING
-from riesgo_agente.agenteRiesgoLiquidez.clustering_riesgo import ClusteringEvaluator
-from riesgo_agente.agenteRiesgoLiquidez.clustering_riesgo import VisualizadorClusters
-from riesgo_agente.agenteRiesgoLiquidez.deteccion_anomalias_lstm import LSTMAnomalyDetector
-from riesgo_agente.agenteRiesgoLiquidez.forecasting_liquidez import ForecastingLiquidez
+from ..utils.helpers import cargar_dataframe_temporal, filtrar_entidades_con_historia, columnas_validas
+from ..utils.config import DATA_ROOT, AGENTE_LIQUIDEZ, LIQ_MODULO_CLUSTERING, LIQ_MODULO_ANOMALIAS, LIQ_MODULO_FORECASTING
+from ..agenteRiesgoLiquidez.clustering_riesgo import ClusteringEvaluator
+from ..agenteRiesgoLiquidez.clustering_riesgo import VisualizadorClusters
+from ..agenteRiesgoLiquidez.deteccion_anomalias_lstm import LSTMAnomalyDetector
+from ..agenteRiesgoLiquidez.forecasting_liquidez import ForecastingLiquidez
+from configuracion.devuelveObjetivo import seleccionar_columnas_objetivo_desde_json
 
 def ejecutar_subagente_liquidez(payload: dict):
     fondo = payload["fondo"]
@@ -50,11 +51,13 @@ def ejecutar_subagente_liquidez(payload: dict):
     df = cargar_dataframe_temporal(AGENTE_LIQUIDEZ, LIQ_MODULO_FORECASTING, fecha, data_root=DATA_ROOT)
     df = filtrar_entidades_con_historia(df)   
 
-    columna_objetivo="monto_activo_neto"
-    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()
+    columna_objetivo = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_LIQUIDEZ, LIQ_MODULO_FORECASTING, df.columns, 1)
+    #columna_objetivo="monto_activo_neto"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]+columna_objetivo).tolist()
 
     forecasting = ForecastingLiquidez(df=df,
-        columna_objetivo=columna_objetivo,
+        columna_objetivo=columna_objetivo[0],
         columnas_exogenas=columnas_usar, mostrarGrafico=False
     )
     forecasting.ejecutar()

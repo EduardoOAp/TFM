@@ -1,7 +1,7 @@
 from . import IndicadorBase
 import pandas as pd
 import numpy as np
-from procesamiento_agente.utils import get_parametro_indicador
+from ..utils import get_parametro_indicador
 
 """ -- Diversificación
 IndicadorConcentracionActivos -
