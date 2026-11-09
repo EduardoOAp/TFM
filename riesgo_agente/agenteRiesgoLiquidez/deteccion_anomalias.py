@@ -46,24 +46,27 @@ class AnomaliaDetector:
                 continue
 
             splits = 0
-            for start in range(0, len(df_sub) - 2 * self.window_size, self.step_size):
-                
-                #train_end = start + self.window_size
-                #test_end = train_end + self.window_size
+            #for start in range(0, len(df_sub) - 2 * self.window_size, self.step_size):
+            for start in range(0, len(df_sub) - self.window_size, self.step_size):
 
+                
                 train_end = start + self.window_size
                 test_end = train_end + int(0.3 * self.window_size)
-                print(f"{start}, {train_end}, {self.window_size}")
-                print(f"{train_end}, {test_end}")
+                #print(f"{start}, {train_end}, {self.window_size}")
+                #print(f"{train_end}, {test_end}")
+                if test_end > len(df_sub):
+                    test_end = len(df_sub)
+                                    
+                #if test_end > len(df_sub):
+                #    print("Pocos datos en test_ent")
+                #    break
 
                 df_train = df_sub.iloc[start:train_end]
                 df_test = df_sub.iloc[train_end:test_end]
 
-                #if len(df_test) < self.window_size:
-                #    break           
-
                 if len(df_train) < self.window_size:
-                    break           
+                    print("Pocos datos en df_train")
+                    break   
 
                 X_train = self.scaler.fit_transform(df_train[self.columnas_modelo])
                 X_test = self.scaler.transform(df_test[self.columnas_modelo])
@@ -83,7 +86,7 @@ class AnomaliaDetector:
                 std_test = score.std()
                 ks_stat, ks_p = ks_2samp(score_train, score)  # Test de Kolmogorov-Smirnov
 
-                print(f"score_train_mean {round(media_train, 4)} score_test_mean: {round(media_test, 4)} score_train_std: {round(std_train, 4)} score_test_std {round(std_test, 4)}  ks_stat: {round(ks_stat, 4)} ks_pvalue: {round(ks_p, 4)}")
+                #print(f"score_train_mean {round(media_train, 4)} score_test_mean: {round(media_test, 4)} score_train_std: {round(std_train, 4)} score_test_std {round(std_test, 4)}  ks_stat: {round(ks_stat, 4)} ks_pvalue: {round(ks_p, 4)}")
 
                 #---
  
@@ -91,7 +94,7 @@ class AnomaliaDetector:
                 threshold = np.percentile(score, 100 * self.contamination)  # p.ej. 5%
                 pred_score_based = (score < threshold).astype(int)                
                 #print('pred ',pred)
-                print(f'procesando vc {entidad} size {start} end {train_end} score {score.mean()}') 
+                #print(f'procesando vc {entidad} size {start} end {train_end} score {score.mean()}') 
                 #print(f"Split {splits+1}, score min: {score.min():.4f}, max: {score.max():.4f}, mean: {score.mean():.4f}")
 
                 #n_anomalias = (pred == -1).sum()
@@ -223,7 +226,7 @@ class AnomaliaDetector:
                 total_anomalias = ((df_sub["anomalia"] == 1) & (df_sub["evaluado"] == 1)).sum()
                 porcentaje_anomalias = round(total_anomalias / total_procesados * 100, 2) if total_procesados > 0 else 0
 
-                print(f"[{entidad}] Registros evaluados: {total_procesados}, Anomalías: {total_anomalias} ({porcentaje_anomalias}%) score {scores.mean()}")
+                #print(f"[{entidad}] Registros evaluados: {total_procesados}, Anomalías: {total_anomalias} ({porcentaje_anomalias}%) score {scores.mean()}")
 
                 #print(f'procesando {entidad} size {start} end {end} score {scores.mean()}') 
                 modelos.append(modelo)
@@ -436,7 +439,7 @@ class VisualizadorAnomalias:
             raise ValueError("El DataFrame debe tener columnas 'anomalia' y 'score_anomalia'")
 
         df_ent = self.df
-        print('por entidad ',self.por_entidad)
+        #print('por entidad ',self.por_entidad)
         if not self.por_entidad:
             entidades_codificadas = [col for col in df_ent.columns if col.startswith("entidad_")]
             df_ent["entidad"] = "ENTIDAD_BASE"  
@@ -456,6 +459,7 @@ class VisualizadorAnomalias:
         handles, labels = plt.gca().get_legend_handles_labels()
         plt.legend(handles=handles, labels=["Normal", "Anómalo"], title="Anomalía")        
         plt.tight_layout()
+        plt.close()
         plt.show()
 
     def graficar_anomalias_temporales(self, entidad):
@@ -484,6 +488,7 @@ class VisualizadorAnomalias:
         plt.xticks(rotation=45)
         plt.legend()
         plt.tight_layout()
+        plt.close()
         plt.show()
 
     def graficar_anomalias_temporales_todas(self, altura_por_entidad=2):
@@ -533,6 +538,7 @@ class VisualizadorAnomalias:
 
         plt.xlabel("Fecha")
         plt.tight_layout()
+        plt.close()
         plt.show()
 
     def resumen_por_entidad(self):
@@ -558,6 +564,7 @@ class VisualizadorAnomalias:
         sns.heatmap(tabla, annot=True, fmt="d", cmap="Reds")
         plt.title("Frecuencia de anomalías por variable y entidad")
         plt.tight_layout()
+        plt.close()
         plt.show()
 
     def graficar_top_drivers(self, df_drivers: pd.DataFrame, top_n: int = 10):
@@ -568,6 +575,7 @@ class VisualizadorAnomalias:
         plt.xlabel("Diferencia Absoluta de Media")
         plt.ylabel("Variable")
         plt.tight_layout()
+        plt.close()
         plt.show()        
 
 # Ejemplo de uso:
@@ -602,13 +610,13 @@ if __name__ == "__main__":
     # Codificación one-hot de 'entidad'
     if not por_entidad:
         df = pd.get_dummies(df, columns=["entidad"], drop_first=True)
-        print(df.head(10))
+        #print(df.head(10))
         #columnas_cluster = df.columns.difference(["fondo", "fecha"]).tolist()    
         columnas_usar = df.columns.difference(["fondo", "fecha"]).tolist()
     else:
         #columnas_cluster = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()    
         columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
-    print(columnas_usar)
+    #print(columnas_usar)
     #df.to_csv("data/baseanomalias.csv", index=False) 
 
     # Inicializar detector con enfoque rolling
@@ -619,7 +627,7 @@ if __name__ == "__main__":
         contamination=0.03
     )    
     validacion_df = detector.validacion_cruzada(df)
-    print("vc ",validacion_df)    
+    #print("vc ",validacion_df)    
   
     df_anotado = detector.entrenar_y_detectar(df)
 
@@ -629,10 +637,10 @@ if __name__ == "__main__":
     #predicciones_nuevo = detector.predecir_anomalias(df_anotado)    
 
     #print("Resumen general:", detector.resumen_general())
-    print("Resumen por entidad:")
-    print(detector.resumen_por_entidad())
+    #print("Resumen por entidad:")
+    #print(detector.resumen_por_entidad())
     df_drivers = detector.drivers_anomalia()
-    print(df_drivers.head(10))
+    #print(df_drivers.head(10))
 
     # Crear instancia del visualizador
     visualizador = VisualizadorAnomalias(df_resultado=df_anotado, columnas_valores=columnas_usar)
@@ -645,7 +653,7 @@ if __name__ == "__main__":
     visualizador.graficar_anomalias_temporales_todas(altura_por_entidad=2)
 
     # Mostrar resumen de anomalías por entidad
-    print(visualizador.resumen_por_entidad())
+    #print(visualizador.resumen_por_entidad())
 
     # Mostrar mapa de calor de frecuencia de anomalías por variable y entidad
     visualizador.mapa_calor_variables()

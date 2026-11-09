@@ -1,7 +1,7 @@
 
 import pandas as pd
 from .utils import guardar_indicadores, cargar_datos_parquet_rango  # si los tienes separados
-from procesamiento_agente.registro_indicadores import REGISTRO_INDICADORES
+from .registro_indicadores import REGISTRO_INDICADORES
 
 class AgenteProcesamiento:
     def __init__(self, fondo: str, fecha_inicio: str, fecha_final: str):

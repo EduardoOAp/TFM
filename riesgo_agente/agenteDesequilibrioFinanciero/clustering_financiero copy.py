@@ -12,10 +12,9 @@ from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bo
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 ###
-from riesgo_agente.utils.config import AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING
+from riesgo_agente.utils.config import AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING 
 from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
-
+#from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
 
 
 class ClusteringEvaluator:
@@ -33,10 +32,11 @@ class ClusteringEvaluator:
         self.modulo = DES_MODULO_CLUSTERING
         self.usar_normalizado = usar_normalizado
         self.historial_scores = []  # Para acumulación si se usa score normalizado
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
+        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING,self.fechaTexto)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING)
-    os.makedirs(self.ruta_resultado, exist_ok=True)
+        os.makedirs(self.ruta_resultado, exist_ok=True)
 
 # Evaluación de múltiples métodos de clustering con puntuación combinada
 
@@ -59,7 +59,7 @@ class ClusteringEvaluator:
             if X_train.shape[0] < 10:
                 continue
             X_train = StandardScaler().fit_transform(X_train)
-            #X_train = StandardScaler().fit_transform(df_train[self.columnas].dropna())
+
             for k in range(2, 6):
                 try:
                     modelo_kmeans = KMeans(n_clusters=k, random_state=42).fit(X_train)
@@ -213,14 +213,6 @@ class ClusteringEvaluator:
             "modelo_entrenado": modelo
         }
 
-        # Solo guarda en historial si usamos score normalizado
-        #if self.usar_normalizado:
-        #    self.historial_scores.append({
-        #        "silhouette": sil,
-        #        "calinski": ch,
-        #        "davies": db
-        #    })        
-
     def _obtener_modelo_desde_resultado(self, nombre_modelo):
         config = self.resultados[nombre_modelo]
         if config["algoritmo"] == "KMeans":
@@ -254,7 +246,7 @@ class ClusteringEvaluator:
             modelo = GaussianMixture(n_components=k, random_state=42).fit(self.X)
             etiquetas = modelo.predict(self.X)
             self._evaluar_modelo(f"GMM_k={k}", etiquetas, {"algoritmo": "GMM", "k": k}, modelo)
-        print(f'resultados {self.resultados}')
+        #print(f'resultados {self.resultados}')
         df_scores = self._score_normalizado_global()
         nombre_mejor = df_scores.iloc[0]["modelo"]
         self.mejor_modelo = (nombre_mejor, self.resultados[nombre_mejor])
@@ -275,35 +267,37 @@ class ClusteringEvaluator:
             }, f)
 
     def ejecutar(self):
-        # Filtrar entidad específica
-        #df_entidad = self.df[self.df["entidad"] == self.entidad].copy()
-
         # Validación cruzada temporal
         df_cv = self.validacion_cruzada_temporal(n_splits=5)
         self.df_validacion = df_cv
         self.ejecutar_evaluacion()
 
         # Guardar resultado (opcional)
-        output_dir = os.path.join(DATA_ROOT, "resultados")
-        os.makedirs(output_dir, exist_ok=True)
-        df_cv.to_csv(os.path.join(output_dir, f"validacion_cruzada_{self.fondo.replace(' ', '_')}.csv"), index=False)
+        df_cv.to_csv(os.path.join(self.ruta_resultado, f"validacion_cruzada_{self.fondo.replace(' ', '_')}.csv"), index=False)
         df_resultado = self.df.copy()
         df_resultado["cluster"] = self.mejor_modelo[1]["etiquetas"]
+        df_resultado.to_csv(os.path.join(self.ruta_resultado, f"resultados_{self.fondo.replace(' ', '_')}.csv"), index=False)
         #self.resultado = df_resultado.to_dict(orient="records")
         self.resultado = ["Se ejecutó clustering de desequilibrio financiero"]
 
 class VisualizadorClusters:
-    def __init__(self, df_resultado, columnas_cluster):
+    def __init__(self, df_resultado, columnas_cluster, MostrarGrafico: bool = True):
         self.df_resultado = df_resultado.copy()
         self.columnas_cluster = columnas_cluster
+        self.fechaTexto = pd.to_datetime(df_resultado['fecha'], errors='coerce').max().strftime('%Y%m%d')
+        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_CLUSTERING, self.fechaTexto)
+        self.mostrarGrafico = MostrarGrafico
 
-    def graficar_dispersion(self, guardar=False, ruta=None):
+    def graficar_dispersion(self, guardar=False):
         plt.figure(figsize=(10, 6))
         sns.scatterplot(data=self.df_resultado, x=self.columnas_cluster[1], y=self.columnas_cluster[2], hue="cluster", palette="tab10", s=60)
         plt.title("Clustering: Dispersión")
         plt.tight_layout()
+        ruta = os.path.join(self.ruta_resultado,"dispersion.png")
         if guardar and ruta:
-            plt.savefig(ruta)
+            plt.savefig(ruta, bbox_inches="tight")        
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def graficar_comparacion_metricas(self, df_metricas):
@@ -322,6 +316,8 @@ class VisualizadorClusters:
         ruta = os.path.join(self.ruta_resultado,"comparacion_metricas.png")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)          
         plt.savefig(ruta, bbox_inches="tight")
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
         df_metricas = df_metricas.sort_values("score_combinado", ascending=False)
@@ -334,36 +330,9 @@ class VisualizadorClusters:
         ranking_df["calinski_Rank"] = ranking_df["calinski_harabasz"].rank(ascending=False).astype(int)
         ranking_df["davies_Rank"] = ranking_df["davies_bouldin"].rank(ascending=True).astype(int)
         final_ranking = ranking_df[['modelo',"silhouette_Rank","calinski_Rank","davies_Rank"]]
-        print(final_ranking)
+        if self.mostrarGrafico:
+            print(final_ranking)
 
-
-    """
-    def graficar_comparacion_metricas(self, resultados):
-        #df_metricas = pd.DataFrame([
-        #    {"modelo": k, **{m: v[m] for m in ["silhouette", "calinski_harabasz", "davies_bouldin", "score_combinado"]}}
-        #    for k, v in resultados.items()
-        #])
-
-        df_metricas = pd.DataFrame([
-            {"modelo": k, **{m: v[m] for m in ["silhouette", "calinski_harabasz", "davies_bouldin", "score_combinado"]}}
-            for k, v in evaluator.resultados.items()
-        ])
-        df_metricas = df_metricas.sort_values("score_combinado", ascending=False)
-        df_metricas.to_csv("data/resultados/metricas_modelos.csv", index=False)        
-        #print(df_metricas)
-        ranking_df = df_metricas.copy()
-        ranking_df["silhouette_Rank"] = ranking_df["silhouette"].rank(ascending=False).astype(int)
-        ranking_df["calinski_Rank"] = ranking_df["calinski_harabasz"].rank(ascending=False).astype(int)
-        ranking_df["davies_Rank"] = ranking_df["davies_bouldin"].rank(ascending=True).astype(int)
-        final_ranking = ranking_df[['modelo',"silhouette_Rank","calinski_Rank","davies_Rank"]]
-        print(final_ranking)
-        #plt.figure(figsize=(12, 6))
-        #sns.barplot(data=df_metricas, x="modelo", y="score_combinado", hue="modelo", palette="viridis")
-        #plt.xticks(rotation=45)
-        #plt.title("Comparación de Score Combinado")
-        #plt.tight_layout()
-        #plt.show()
-    """
     def graficar_boxplots_por_cluster(self):
         self.df_resultado.head(10)
 
@@ -372,6 +341,8 @@ class VisualizadorClusters:
             plt.suptitle("")
             plt.xlabel('cluster')
             plt.ylabel(col)
+            if not self.mostrarGrafico:
+                plt.close()
             plt.show()
 
     def graficar_evolucion_por_entidad(self):
@@ -398,6 +369,9 @@ class VisualizadorClusters:
 
         plt.suptitle("Evolución de Clusters por Entidad", fontsize=12)
         plt.tight_layout(rect=[0, 0, 1, 0.97])
+
+        if not self.mostrarGrafico:
+            plt.close()
         plt.show()
 
     def resumen_clusters(self):
@@ -427,7 +401,8 @@ class VisualizadorClusters:
 
     def generar_tabla_comportamiento_reciente(self): #df_resultado, columnas_cluster):
         # Asegurarse que fecha es datetime
-        self.df_resultado["fecha"] = pd.to_datetime(self.df_resultado["fecha"])
+        df_resultado = self.df_resultado
+        df_resultado["fecha"] = pd.to_datetime(df_resultado["fecha"])
 
         # Obtener la última fecha por entidad
         ultima_fecha = df_resultado.groupby("entidad")["fecha"].max().reset_index()
@@ -443,7 +418,7 @@ class VisualizadorClusters:
         # Generar resumen estadístico por entidad
         resumen = df_historico_cluster_actual.groupby("entidad").agg({
             "fecha": ["min", "max", "count"],
-            **{col: ["mean", "std", "min", "max"] for col in columnas_cluster}
+            **{col: ["mean", "std", "min", "max"] for col in self.columnas_cluster}
         })
 
         resumen.columns = ['_'.join(col).strip() for col in resumen.columns.values]

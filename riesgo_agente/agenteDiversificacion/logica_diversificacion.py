@@ -4,7 +4,7 @@ from riesgo_agente.agenteDiversificacion.clustering_diversificacion import Clust
 from riesgo_agente.agenteDiversificacion.clustering_diversificacion import VisualizadorClusters
 from riesgo_agente.agenteDiversificacion.optimizacion_portafolios import OptimizadorPortafolioLiquido
 from riesgo_agente.agenteDiversificacion.optimizacion_portafolios import VisualizadorOptimizacion
-
+from configuracion.devuelveObjetivo import seleccionar_columnas_objetivo_desde_json
 
 def ejecutar_subagente_diversificacion(payload: dict):
     fondo = payload["fondo"]
@@ -53,9 +53,10 @@ def ejecutar_subagente_diversificacion(payload: dict):
     df = filtrar_entidades_con_historia(df)    
 
     columnas_optimizacion= df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
-
-    objetivos = ["sharpe_ratio", "indice_liquidez_portafolio"]
-    resultados_globales = {}
+    objetivos = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_DIVERSIFICACION, DIV_MODULO_OPTIMIZACION, df.columns, 2)
+    #objetivos = ["sharpe_ratio", "indice_liquidez_portafolio"]
+    #resultados_globales = {}
 
     for objetivo in objetivos:
         optimizacion = OptimizadorPortafolioLiquido(
@@ -65,10 +66,10 @@ def ejecutar_subagente_diversificacion(payload: dict):
             horizonte=6
         )
         resultados = optimizacion.ejecutar()
-        resultados_globales[objetivo] = {
-            "resultados": resultados,
-            "mejor_modelo": optimizacion.mejor_modelo
-        }
+        #resultados_globales[objetivo] = {
+        #    "resultados": resultados,
+        #    "mejor_modelo": optimizacion.mejor_modelo
+        #}
 
         # Mostrar resumen
         #print(f"\n📌 Resultados para: {objetivo}")
@@ -87,6 +88,7 @@ def ejecutar_subagente_diversificacion(payload: dict):
     #                                agente=AGENTE_DIVERSIFICACION, modulo=DIV_MODULO_OPTIMIZACION)
     visualizador = VisualizadorOptimizacion(optimizacion.resultados, fecha, False)
     visualizador.graficar_metricas(guardar=True, ruta=f"{fecha}_metricas.png")
+    visualizador.mostrar_tabla() #E Guarda la tabla
 
     # 5. Armar resultado si se requiere
     return {

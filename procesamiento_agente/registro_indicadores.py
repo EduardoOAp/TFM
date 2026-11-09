@@ -1,4 +1,4 @@
-from procesamiento_agente.indicadores import (
+from .indicadores import (
     IndicadorConcentracionActivos,
     IndicadorTasaAportacion,
     IndicadorIndiceEnvejecimiento,

@@ -6,6 +6,7 @@ from riesgo_agente.agenteDesequilibrioFinanciero.deteccion_anomalias import Anom
 from riesgo_agente.agenteDesequilibrioFinanciero.deteccion_anomalias import VisualizadorAnomalias
 from riesgo_agente.agenteDesequilibrioFinanciero.forecasting_activo_neto import ForecastingActivoNeto
 from riesgo_agente.agenteDesequilibrioFinanciero.forecasting_valor_cuota import ForecastingValorCuota
+from configuracion.devuelveObjetivo import seleccionar_columnas_objetivo_desde_json
 
 def ejecutar_subagente_desequilibrio(payload: dict):
     fondo = payload["fondo"]
@@ -52,14 +53,13 @@ def ejecutar_subagente_desequilibrio(payload: dict):
     df = filtrar_entidades_con_historia(df)    
 
     rolling = True
-    columnasAnomalias = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
-    columnasAnomalias = ["tasa_crecimiento_aportantes","tasa_crecimiento_pensionados","tasa_crecimiento_rentabilidad"]
+    #columnasAnomalias = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
+    columnasAnomalias = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS, df.columns, 3)
+    #columnasAnomalias = ["tasa_crecimiento_aportantes","tasa_crecimiento_pensionados","tasa_crecimiento_rentabilidad"]
     # Definir las columnas que deseas conservar
-    columnas_deseadas = ["entidad", "fondo", "fecha", 
-                        "tasa_crecimiento_aportantes", 
-                        "tasa_crecimiento_pensionados", 
-                        "tasa_crecimiento_rentabilidad"]
-
+    #columnas_deseadas = df.columns.difference(["entidad", "fondo", "fecha"]+columnasAnomalias).tolist()
+    columnas_deseadas = ["entidad", "fondo", "fecha"]+columnasAnomalias
     # Filtrar el DataFrame original para conservar solo esas columnas
     df = df[columnas_deseadas].copy()
     df_resultado = None
@@ -85,13 +85,15 @@ def ejecutar_subagente_desequilibrio(payload: dict):
 
     # 4. Ejecutar Forecasting AN
     df = cargar_dataframe_temporal(AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING, fecha, data_root=DATA_ROOT)
-    df = filtrar_entidades_con_historia(df)      
+    df = filtrar_entidades_con_historia(df) #, min_periodos = 24*30)      
     
-    columna_objetivo="variacion_activo_neto"
-    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()
+    columna_objetivo = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_DESEQUILIBRIO, DES_MODULO_FORECASTING, df.columns, 1)
+    #columna_objetivo="variacion_activo_neto"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]+columna_objetivo).tolist()
 
     forecasting = ForecastingActivoNeto(df=df,
-        columna_objetivo=columna_objetivo,
+        columna_objetivo=columna_objetivo[0],
         columnas_exogenas=columnas_usar
     )
     resultados = forecasting.ejecutar()
@@ -100,13 +102,14 @@ def ejecutar_subagente_desequilibrio(payload: dict):
 
     # 4. Ejecutar Forecasting VC
     df = cargar_dataframe_temporal(AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC, fecha, data_root=DATA_ROOT)
-    df = filtrar_entidades_con_historia(df)
-
-    columna_objetivo="valor_cuota"
-    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha",columna_objetivo]).tolist()
+    df = filtrar_entidades_con_historia(df, min_periodos = 24*30)
+    columna_objetivo = seleccionar_columnas_objetivo_desde_json(
+        AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC, df.columns, 1)
+    #columna_objetivo="valor_cuota"
+    columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]+columna_objetivo).tolist()
 
     forecast_vc = ForecastingValorCuota(df=df,
-        columna_objetivo=columna_objetivo,
+        columna_objetivo=columna_objetivo[0],
         columnas_exogenas=columnas_usar
     )
     resultados = forecast_vc.ejecutar()

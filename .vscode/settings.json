@@ -1,0 +1,8 @@
+{
+    "window.autoDetectColorScheme": false,
+    "zenMode.centerLayout": false,
+    "zenMode.fullScreen": false,
+    "zenMode.hideActivityBar": false,
+    "workbench.activityBar.iconClickBehavior": "focus",
+    "workbench.activityBar.location": "default"
+}

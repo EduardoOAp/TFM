@@ -1,823 +1,480 @@
+"""Detección de anomalías de desequilibrio financiero mediante IsolationForest.
+
+Por defecto procesa independientemente cada entidad de un fondo. Los resultados
+históricos de modo rolling se puntúan fuera de muestra (ventana anterior).
+Los primeros `window_size` registros quedan sin evaluar, nunca se consideran normales.
+Los scores más bajos indican mayor anomalía y las etiquetas son 0 normal, 1 anómala,
+NA no evaluada. Los umbrales son cuantiles del entrenamiento y NO alertas regulatorias.
+"""
+from __future__ import annotations
+
+import argparse
 import os
-import pandas as pd
-import numpy as np
 import pickle
+import re
+import tempfile
+import traceback
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.stats import ks_2samp
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import RobustScaler
-from sklearn.model_selection import ParameterGrid
-from typing import List, Dict
-from scipy.stats import ks_2samp 
-import matplotlib.pyplot as plt
-import seaborn as sns
-## Quitar esta dos lineas despues de pruebas
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-###
-from riesgo_agente.utils.config import AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS 
-from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_mensuales, unir_serie_y_predicciones
+
+try:
+    from riesgo_agente.utils.config import (
+        AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS,
+        DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT,
+    )
+except ImportError:
+    AGENTE_DESEQUILIBRIO = 'Agente de Desequilibrio Financiero'
+    DES_MODULO_ANOMALIAS = 'Detección de Anomalías Financieras'
+    DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT = 'data', 'temporal', 'resultados', 'modelos'
+
+
+def _seguro(v):
+    return re.sub(r'[^\w.\-]+', '_', str(v), flags=re.UNICODE).strip('_') or 'sin_nombre'
+
+
+def _guardar_pickle(obj, ruta):
+    ruta = Path(ruta)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    temporal = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='wb', dir=ruta.parent, suffix='.tmp', delete=False) as f:
+            temporal = Path(f.name)
+            pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temporal, ruta)
+    finally:
+        if temporal is not None and temporal.exists():
+            temporal.unlink()
 
 
 class AnomaliaDetector:
-#    def __init__(self, columnas: List[str]):
-    def __init__(self, df: pd.DataFrame, df_resultado: pd.DataFrame, rolling: bool, columnas: List[str], window_size: int = 24, step_size: int = 6, contamination: float = 0.05, random_state: int = 42 , por_entidad: bool = True):
-        self.df = df.dropna(subset=columnas).copy()
-        self.df_resultado = df_resultado
-        self.columnas = columnas
-        self.rolling = rolling
-        self.columnas_modelo = columnas
-        self.window_size = window_size
-        self.step_size = step_size
-        self.contamination = contamination
-        self.random_state = random_state
-        self.modelo = None
-        self.modelos_por_entidad = {} 
-        self.modelos_por_ventana: Dict[str, List[IsolationForest]] = {}       
-        self.scaler = RobustScaler()
-        self.resultado = None
-        self.parametros = None
-        self.score = None
-        self.por_entidad = por_entidad
-        self.fechaTexto = pd.to_datetime(df['fecha'], errors='coerce').max().strftime('%Y%m%d')
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS,self.fechaTexto)
-        self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS)
-        self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS)
-        self.agente = AGENTE_DESEQUILIBRIO
-        self.modulo = DES_MODULO_ANOMALIAS
-        os.makedirs(self.ruta_resultado, exist_ok=True)        
-
-    def validacion_cruzada_rolling(self, df: pd.DataFrame, n_splits: int = 5):
-        
-        df = df.copy()
-        df["fecha"] = pd.to_datetime(df["fecha"])
-        df = df.sort_values("fecha")
-
-        resultados = []
-        entidades = df["entidad"].unique() if self.por_entidad else [None]
-
-        for entidad in entidades:
-            df_sub = df[df["entidad"] == entidad] if entidad else df
-            df_sub = df_sub.dropna(subset=self.columnas_modelo + ["fecha"]).copy()
-            df_sub = df_sub.sort_values("fecha").reset_index(drop=True)
-
-            if len(df_sub) < self.window_size + 1:
-                continue
-
-            splits = 0
-            for start in range(0, len(df_sub) - 2 * self.window_size, self.step_size):
-                
-                train_end = start + self.window_size
-                test_end = train_end + int(0.3 * self.window_size)
-                #print(f"{start}, {train_end}, {self.window_size}")
-                #print(f"{train_end}, {test_end}")
-
-                df_train = df_sub.iloc[start:train_end]
-                df_test = df_sub.iloc[train_end:test_end]
-
-                if len(df_train) < self.window_size:
-                    break           
-
-                X_train = self.scaler.fit_transform(df_train[self.columnas_modelo])
-                X_test = self.scaler.transform(df_test[self.columnas_modelo])
-
-                modelo = IsolationForest(n_estimators=50, max_samples=0.6, bootstrap=True, contamination="auto", random_state=self.random_state)
-                modelo.fit(X_train)
-
-                pred = modelo.predict(X_test)
-                score = modelo.decision_function(X_test)
-                #---
-                score_train = modelo.decision_function(X_train)
-
-                # Métricas de contraste
-                media_train = score_train.mean()
-                media_test = score.mean()
-                std_train = score_train.std()
-                std_test = score.std()
-                ks_stat, ks_p = ks_2samp(score_train, score)  # Test de Kolmogorov-Smirnov
-
-                #print(f"score_train_mean {round(media_train, 4)} score_test_mean: {round(media_test, 4)} score_train_std: {round(std_train, 4)} score_test_std {round(std_test, 4)}  ks_stat: {round(ks_stat, 4)} ks_pvalue: {round(ks_p, 4)}")
-
-                #---
- 
-                # Ajuste: Umbral dinámico de score (percentil bajo → anómalo)
-                threshold = np.percentile(score, 100 * self.contamination)  # p.ej. 5%
-                pred_score_based = (score < threshold).astype(int)                
-                #print('pred ',pred)
-                #print(f'procesando vc {entidad} size {start} end {train_end} score {score.mean()}') 
-                #print(f"Split {splits+1}, score min: {score.min():.4f}, max: {score.max():.4f}, mean: {score.mean():.4f}")
-
-                n_anomalias = pred_score_based.sum()
-                resultados.append({
-                    "entidad": entidad if entidad else "GLOBAL",
-                    "split": splits + 1,
-                    "observaciones_test": len(X_test),                    
-                    "anomalias_detectadas": n_anomalias,  
-                    "porcentaje_anomalias": round(100 * n_anomalias / len(X_test), 2),                    
-                    "score_test": round(score.mean(), 4),
-                    "score_min": round(score.min(), 4),  
-                    "score_max": round(score.max(), 4),
-                    "es_anomalia": int(pred[0] == -1),
-                    "score_train_mean": round(media_train, 4),
-                    "score_test_mean": round(media_test, 4),
-                    "score_train_std": round(std_train, 4),
-                    "score_test_std": round(std_test, 4),
-                    "ks_stat": round(ks_stat, 4),
-                    "ks_pvalue:": round(ks_p, 4)
-                })
-                splits += 1
-
-        return pd.DataFrame(resultados).sort_values(by=["entidad", "split"]).reset_index(drop=True)
-
-    def validacion_cruzada(self, df: pd.DataFrame, fecha_col: str = "fecha", n_splits: int = 5):
-        df = df.copy()
-        df[fecha_col] = pd.to_datetime(df[fecha_col])
-        df = df.sort_values(fecha_col)
-
-        resultados = []
-        entidades = df["entidad"].unique() if self.por_entidad else [None]
-
-        for entidad in entidades:
-            df_sub = df[df["entidad"] == entidad] if entidad else df
-            df_sub = df_sub.dropna(subset=self.columnas_modelo + ["fecha"]).copy()
-            fechas = df_sub[fecha_col].dropna().unique()
-            if len(fechas) < n_splits + 2:
-                continue
-            bloques = np.array_split(fechas, n_splits + 2)
-
-            for i in range(1, n_splits):
-                fechas_train = np.concatenate(bloques[:i])
-                fechas_val = bloques[i]
-                fechas_test = bloques[i + 1]
-
-                df_train = df_sub[df_sub[fecha_col].isin(fechas_train)].dropna(subset=self.columnas_modelo)
-                df_val = df_sub[df_sub[fecha_col].isin(fechas_val)].dropna(subset=self.columnas_modelo)
-                df_test = df_sub[df_sub[fecha_col].isin(fechas_test)].dropna(subset=self.columnas_modelo)
-
-                try:
-                    X_train = self.scaler.fit_transform(df_train[self.columnas_modelo])
-                    X_val = self.scaler.transform(df_val[self.columnas_modelo])
-                    X_test = self.scaler.transform(df_test[self.columnas_modelo])
-
-                    modelo = IsolationForest(n_estimators=100, contamination=self.contamination, random_state=self.random_state)
-                    modelo.fit(X_train)
-
-                    pred_val = modelo.predict(X_val)
-                    pred_test = modelo.predict(X_test)
-                    score_test = modelo.decision_function(X_test)
-
-                    n_anomalias = (pred_test == -1).sum()
-                    resultados.append({
-                        "entidad": entidad if entidad else "GLOBAL",
-                        "split": i,
-                        "observaciones_test": len(X_test),
-                        "anomalias_detectadas": n_anomalias,
-                        "porcentaje_anomalias": round(n_anomalias / len(X_test) * 100, 2),
-                        "score_promedio": round(score_test.mean(), 4)
-                    })
-                except Exception as e:
-                    print(f"Error en entidad {entidad} split {i}: {e}")
-
-        return pd.DataFrame(resultados).sort_values(by=["entidad", "split"]).reset_index(drop=True)
-
-    #def _buscar_mejor_modelo(self, X_train: np.ndarray, X_val: np.ndarray):
-    def _buscar_mejor_modelo_rolling(self, X_window: np.ndarray):
-        param_grid = {
-            'n_estimators': [100, 50],
-            'contamination': [0.1, 0.03, 0.05],
-            'max_features': [1.0, 0.6]
-        }
-        mejores = []
-        for params in ParameterGrid(param_grid):
-            try:
-                modelo = IsolationForest(**params, random_state=42).fit(X_window)
-                scores = modelo.decision_function(X_window)
-                score_medio = scores.mean()
-                mejores.append((score_medio, params, modelo))
-            except Exception:
-                continue
-
-        if not mejores:
-            raise ValueError("No se encontró ningún modelo válido.")
-        mejores.sort(reverse=True, key=lambda x: x[0])
-        return mejores[0][2], mejores[0][1], mejores[0][0]
-
-    def entrenar_y_detectar(self, df: pd.DataFrame) -> pd.DataFrame:
-        resultados = []
-        entidades = df["entidad"].unique() if self.por_entidad else [None]
-
-        for entidad in entidades:
-            df_sub = df[df["entidad"] == entidad] if entidad else df
-            df_sub = df_sub.dropna(subset=self.columnas_modelo + ["fecha"]).copy()
-            df_sub["fecha"] = pd.to_datetime(df_sub["fecha"])
-            df_sub = df_sub.sort_values("fecha").reset_index(drop=True)
-
-            if len(df_sub) < self.window_size:
-                continue
-
-            modelos = []
-            df_sub["anomalia"] = 0
-            df_sub["score_anomalia"] = np.nan
-            df_sub["evaluado"] = 0
-
-            if self.rolling:
-                for start in range(0, len(df_sub) - self.window_size + 1, self.step_size):
-                    end = start + self.window_size
-                    df_window = df_sub.iloc[start:end].copy()
-                    X = self.scaler.fit_transform(df_window[self.columnas_modelo])
-
-                    modelo = IsolationForest(
-                        n_estimators=50,
-                        contamination=self.contamination,
-                        random_state=self.random_state
-                    )
-                    modelo.fit(X)
-                    etiquetas = modelo.predict(X)
-                    scores = modelo.decision_function(X)
-
-                    df_sub.loc[start:end - 1, "anomalia"] = np.maximum(
-                        df_sub.loc[start:end - 1, "anomalia"].values,
-                        (etiquetas == -1).astype(int)
-                    )
-                    df_sub.loc[start:end - 1, "score_anomalia"] = scores
-                    df_sub.loc[start:end - 1, "evaluado"] = 1
-
-                    modelos.append(modelo)
-
-            else:
-                # Entrenamiento único sin rolling
-                X = self.scaler.fit_transform(df_sub[self.columnas_modelo])
-                modelo = IsolationForest(
-                    n_estimators=50,
-                    contamination=self.contamination,
-                    random_state=self.random_state
-                )
-                modelo.fit(X)
-                etiquetas = modelo.predict(X)
-                scores = modelo.decision_function(X)
-
-                df_sub["anomalia"] = (etiquetas == -1).astype(int)
-                df_sub["score_anomalia"] = scores
-                df_sub["evaluado"] = 1
-                modelos.append(modelo)
-
-            # Mostrar resumen
-            total_procesados = df_sub["evaluado"].sum()
-            total_anomalias = ((df_sub["anomalia"] == 1) & (df_sub["evaluado"] == 1)).sum()
-            porcentaje_anomalias = round(total_anomalias / total_procesados * 100, 2) if total_procesados > 0 else 0
-            #print(f"[{entidad}] Registros evaluados: {total_procesados}, Anomalías: {total_anomalias} ({porcentaje_anomalias}%)")
-
-            resultados.append(df_sub)
-
-            if self.por_entidad:
-                self.modelos_por_entidad[entidad] = modelos[-1]
-                self.modelos_por_ventana[entidad] = modelos
-
-        df_final = pd.concat(resultados).sort_index().reset_index(drop=True)
-        self.resultado = df_final
-        return df_final
-
-    """
-    def entrenar_y_detectar(self, df: pd.DataFrame):
-    #def entrenar_con_rolling_window(self, df: pd.DataFrame):
-        resultados = []
-        entidades = df["entidad"].unique() if self.por_entidad else [None]
-
-        for entidad in entidades:
-            df_sub = df[df["entidad"] == entidad] if entidad else df
-            df_sub = df_sub.dropna(subset=self.columnas_modelo + ["fecha"]).copy()
-            df_sub["fecha"] = pd.to_datetime(df_sub["fecha"])
-            df_sub = df_sub.sort_values("fecha").reset_index(drop=True)
-
-            if len(df_sub) < self.window_size:
-                continue
-            modelos = []
-            df_sub["anomalia"] = 0
-            df_sub["score_anomalia"] = np.nan
-
-            for start in range(0, len(df_sub) - self.window_size + 1, self.step_size):
-                end = start + self.window_size
-                              
-                df_window = df_sub.iloc[start:end].copy()
-                X = self.scaler.fit_transform(df_window[self.columnas_modelo])
-
-                modelo = IsolationForest(n_estimators=50, contamination=self.contamination, random_state=self.random_state)
-                modelo.fit(X)
-                etiquetas = modelo.predict(X)
-                scores = modelo.decision_function(X)
-                 
-                df_sub.loc[start:end-1, "anomalia"] = np.maximum(
-                    df_sub.loc[start:end-1, "anomalia"].values,
-                    (etiquetas == -1).astype(int)
-                )
-
-                df_sub.loc[start:end - 1, "score_anomalia"] = scores
-                df_sub.loc[start:end - 1, "evaluado"] = 1
-                total_procesados = df_sub["evaluado"].sum()
-                total_anomalias = ((df_sub["anomalia"] == 1) & (df_sub["evaluado"] == 1)).sum()
-                porcentaje_anomalias = round(total_anomalias / total_procesados * 100, 2) if total_procesados > 0 else 0
-
-                print(f"[{entidad}] Registros evaluados: {total_procesados}, Anomalías: {total_anomalias} ({porcentaje_anomalias}%) score {scores.mean()}")
-
-                #print(f'procesando {entidad} size {start} end {end} score {scores.mean()}') 
-                modelos.append(modelo)
-
-            resultados.append(df_sub)
-            if self.por_entidad:
-                self.modelos_por_entidad[entidad] = modelos[-1]
-                self.modelos_por_ventana[entidad] = modelos            
-
-
-        df_final = pd.concat(resultados).sort_index().reset_index(drop=True)
-        self.resultado = df_final
-        return df_final
-    """
-
-    def ejecutar(self):
-        # Verificar fechas faltantes por entidad
-        #entidades = df["entidad"].unique()
-        #for ent in entidades:
-        #    fechas_ent = df[df["entidad"] == ent]["fecha"]
-        #    print(f"{ent}: fechas únicas = {fechas_ent.nunique()}, rango = {fechas_ent.min()} → {fechas_ent.max()}")    
-
-        # Codificación one-hot de 'entidad'
-        if not self.por_entidad:
-            df = pd.get_dummies(self.df, columns=["entidad"], drop_first=True)
-        else:
-            df = self.df
-        #df.to_csv("data/baseanomalias.csv", index=False) 
-
-        if self.rolling:    
-            validacion_df = self.validacion_cruzada_rolling(df)
-        else:
-            validacion_df = self.validacion_cruzada(df)
-        #print("vc ",validacion_df)
-        nombre_archivo = "historial_validacion_anomalias_rolling.csv" if self.rolling else "historial_validacion_anomalias_df.csv"    
-        ruta = os.path.join(self.ruta_resultado, nombre_archivo)
-        validacion_df.to_csv(ruta, index=False)
-    
-        df_anotado = self.entrenar_y_detectar(df)
-        ruta_modelo=os.path.join(self.ruta_modelo, "anomalias_general.pkl")
-        os.makedirs(os.path.dirname(ruta_modelo), exist_ok=True)
-        self.guardar_modelo(ruta_modelo)
-
-        print("Resumen por entidad:")
-        print(self.resumen_por_entidad())
-        df_drivers = self.drivers_anomalia()
-        print(df_drivers.head(10))    
-        nombre_archivo = "drivers_anomalias_rolling.csv" if self.rolling else "drivers_anomalias_df.csv"    
-        ruta = os.path.join(self.ruta_resultado, nombre_archivo)
-        df_drivers.to_csv(ruta, index=False)
-        nombre_archivo = "Anotado_hiperparametros_anomalias_rolling.csv" if self.rolling else "Anotado_hiperparametros_anomalias_df.csv"
-        ruta = os.path.join(self.ruta_resultado, nombre_archivo)
-        df_anotado.to_csv(ruta, index=False)
-        print("[INFO] Historial de hiperparámetros guardado.")   
-        self.df_resultado = df_anotado
-        #self.resultado = df_historial.to_dict(orient="records")
-        self.resultado = ["Se ejecutó anomalias de desequilibrio financiero"]
-
-    def guardar_modelo(self, ruta: str):
-        with open(ruta, "wb") as f:
-            pickle.dump({
-                "por_entidad": self.por_entidad,
-                "modelo": self.modelo,
-                "modelos_por_entidad": self.modelos_por_entidad,
-                "scaler": self.scaler,
-                "parametros": self.parametros,
-                "columnas": self.columnas
-            }, f)
-
-    def cargar_modelo(self, ruta: str):
-        with open(ruta, "rb") as f:
-            data = pickle.load(f)
-            self.por_entidad = data.get("por_entidad", False)
-            self.modelo = data.get("modelo")
-            self.modelos_por_entidad = data.get("modelos_por_entidad", {})
-            self.scaler = data["scaler"]
-            self.parametros = data.get("parametros", {})
-            # Soporte flexible para columna usada
-            columnas = data.get("columnas")
-            if hasattr(self, "columnas_modelo"):
-                self.columnas_modelo = columnas
-            else:
-                self.columnas = columnas      
-
-    def predecir_anomalias(self, df_nuevo: pd.DataFrame):
-    #def predecir_rolling_window(self, df_nuevo: pd.DataFrame):
-        """
-        Aplica detección de anomalías con ventana móvil sobre un conjunto nuevo de datos.
-
-        Requiere que:
-            - 'fecha' esté presente y ordenada cronológicamente.
-            - Las columnas del modelo estén completas (sin NaN).
-            - El objeto tenga definidos: window_size, step_size, columnas_modelo, por_entidad.
-
-        Devuelve:
-            - DataFrame con columnas adicionales: 'anomalia' y 'score_anomalia'.
-        """
-        resultados = []
-        columnas = self.columnas_modelo if hasattr(self, "columnas_modelo") else self.columnas
-        entidades = df_nuevo["entidad"].unique() if self.por_entidad else [None]
-
-        for entidad in entidades:
-            df_sub = df_nuevo[df_nuevo["entidad"] == entidad] if entidad else df_nuevo
-            df_sub = df_sub.dropna(subset=columnas + ["fecha"]).copy()
-            df_sub["fecha"] = pd.to_datetime(df_sub["fecha"])
-            df_sub = df_sub.sort_values("fecha").reset_index(drop=True)
-
-            if len(df_sub) < self.window_size:
-                continue
-
-            df_sub["anomalia"] = 0
-            df_sub["score_anomalia"] = np.nan
-
-            for start in range(0, len(df_sub) - self.window_size + 1, self.step_size):
-                end = start + self.window_size
-                df_window = df_sub.iloc[start:end].copy()
-                X = self.scaler.fit_transform(df_window[columnas])
-
-                # Entrenar modelo por ventana
-                modelo = IsolationForest(
-                    n_estimators=100,
-                    contamination=self.contamination,
-                    random_state=self.random_state
-                )
-                modelo.fit(X)
-                etiquetas = modelo.predict(X)
-                scores = modelo.decision_function(X)
-
-                df_sub.loc[start:end-1, "anomalia"] = np.maximum(
-                    df_sub.loc[start:end-1, "anomalia"].values,
-                    (etiquetas == -1).astype(int)
-                )
-                df_sub.loc[start:end-1, "score_anomalia"] = scores
-
-            resultados.append(df_sub)
-
-        if resultados:
-            return pd.concat(resultados).sort_index().reset_index(drop=True)
-        else:
-            return pd.DataFrame(columns=df_nuevo.columns.tolist() + ["anomalia", "score_anomalia"])
-
-    def resumen_general(self) -> Dict:
-        if self.resultado is None or self.resultado.empty:
-            return {
-                "mejores_parametros": None,
-                "score_promedio": None,
-                "total_observaciones": 0,
-                "anomalias_detectadas": 0,
-                "porcentaje_anomalias": 0.0,
-            }
-
-        df = self.resultado
-        anom_alias = df[df["anomalia"].isin([-1, 1])]  # Soporte para clásico y rolling
-
-        if self.por_entidad:
-            mejores_parametros = {
-                entidad: modelo_info.get("parametros", {})
-                for entidad, modelo_info in self.modelos_por_entidad.items()
-            }
-            score_promedio = "por entidad"
-        else:
-            mejores_parametros = getattr(self, "parametros", "N/A")
-            score_promedio = round(self.score, 4) if hasattr(self, "score") else "N/A"
-
-        return {
-            "mejores_parametros": mejores_parametros,
-            "score_promedio": score_promedio,
-            "total_observaciones": len(df),
-            "anomalias_detectadas": len(anom_alias),
-            "porcentaje_anomalias": round(len(anom_alias) / len(df) * 100, 2),
-        }
-
-    def resumen_por_entidad(self) -> pd.DataFrame:
-        if self.resultado is None or self.resultado.empty:
-            return pd.DataFrame(columns=["anomalia", "normal", "total", "%_anomalias"])
-        
-        df = self.resultado.copy()
-
-        # Asegurarse de que exista columna 'entidad'
-        if "entidad" not in df.columns:
-            df["entidad"] = "GLOBAL"
-
-        # Anomalías pueden ser -1 (clasificación clásica) o 1 (rolling)
-        df["anomalia_binaria"] = df["anomalia"].apply(lambda x: 1 if x in [-1, 1] else 0)
-        df["normal"] = df["anomalia"].apply(lambda x: 0 if x in [-1, 1] else 1)
-
-        resumen = df.groupby("entidad")[["anomalia_binaria", "normal"]].sum()
-        resumen = resumen.rename(columns={"anomalia_binaria": "anomalia"})
-        resumen["total"] = resumen["anomalia"] + resumen["normal"]
-        resumen["%_anomalias"] = round(resumen["anomalia"] / resumen["total"] * 100, 2)
-        resumen = resumen.sort_values("%_anomalias", ascending=False)
-
-        resumen.loc["TOTAL"] = resumen.sum(numeric_only=True)
-        resumen.loc["TOTAL", "%_anomalias"] = round(
-            resumen.loc["TOTAL", "anomalia"] / resumen.loc["TOTAL", "total"] * 100, 2
-        )
-
-        return resumen
-
-    def drivers_anomalia(self, columnas: List[str] = None, top_n: int = None) -> pd.DataFrame:
-        """
-        Identifica variables con mayores diferencias de media entre normales y anómalas.
-        Soporta anomalías marcadas como -1 (clásico) o 1 (rolling window).
-        """
-        if self.resultado is None or self.resultado.empty:
-            raise ValueError("No hay resultados disponibles. Ejecuta primero 'entrenar_y_detectar' o 'entrenar_con_rolling'.")
-
-        df = self.resultado.copy()
-        df_sub = df.dropna(subset=self.columnas_modelo + ["fecha"]).copy()
-        df = df_sub.copy()
-        #print(df.head(10))
-        if columnas is None:
-            columnas = df.select_dtypes(include="number").columns.difference(["anomalia", "score_anomalia"])
-
-        # Asegurar compatibilidad con ambos esquemas de etiquetas
-        normales = df[df["anomalia"].isin([0, 1])] if df["anomalia"].isin([0, 1]).any() else df[df["anomalia"] == 1]
-        anomalias = df[df["anomalia"].isin([-1, 1])]
-
-        resultados = []
-        for col in columnas:
-            media_normal = normales[col].mean()
-            media_anomalo = anomalias[col].mean()
-            diferencia = media_anomalo - media_normal
-            resultados.append({
-                "variable": col,
-                "media_normal": media_normal,
-                "media_anomalo": media_anomalo,
-                "diferencia": diferencia,
-                "abs_diferencia": abs(diferencia)
-            })
-
-        df_resultado = pd.DataFrame(resultados).sort_values("abs_diferencia", ascending=False).reset_index(drop=True)
-        return df_resultado if not top_n else df_resultado.head(top_n)
-
-class VisualizadorAnomalias:
-    def __init__(self, df_resultado, columnas_valores, por_entidad: bool = True, mostrarGrafico: bool = False):
-        self.df = df_resultado.copy()
-        self.columnas_valores = columnas_valores
-        self.resultado = None
-        self.por_entidad = por_entidad
-        self.mostrarGrafico = mostrarGrafico  
-        self.fechaTexto = pd.to_datetime(df_resultado['fecha'], errors='coerce').max().strftime('%Y%m%d')
-        self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS,self.fechaTexto)        
-    """
-    def ajusta_dataset(self, por_entidad = True):
-        df1 = self.df
+    def __init__(self, df: pd.DataFrame, df_resultado: pd.DataFrame | None = None,
+                 rolling: bool = True, columnas: list[str] | None = None,
+                 window_size: int = 24, step_size: int = 6,
+                 contamination: float = 0.05, random_state: int = 42,
+                 por_entidad: bool = True, fondo: str = 'ROP',
+                 min_registros: int = 12, n_estimators: int = 100):
         if not por_entidad:
-            entidades_codificadas = [col for col in df1.columns if col.startswith("entidad_")]
-            df["entidad"] = "ENTIDAD_BASE"  
-            for col in entidades_codificadas:
-                df1.loc[df1[col] == 1, "entidad"] = col.replace("entidad_", "").replace("_", " ")
-            
-            df1 = df1.drop(columns=[col for col in df1.columns if col.startswith("entidad_")])
+            raise ValueError('Esta versión exige por_entidad=True para evitar mezclar entidades.')
+        if not 0 < contamination < 0.5:
+            raise ValueError('contamination debe estar entre 0 y 0.5 (exclusivo).')
+        if window_size < 8 or step_size < 1 or min_registros < 8:
+            raise ValueError('window_size y min_registros >= 8, step_size >= 1.')
+        self.columnas = list(columnas or [])
+        if not self.columnas or len(set(self.columnas)) != len(self.columnas):
+            raise ValueError('Indique una lista de columnas numéricas sin duplicados.')
+        requeridas = set(self.columnas) | {'fecha', 'entidad', 'fondo'}
+        faltantes = sorted(requeridas - set(df.columns))
+        if faltantes:
+            raise ValueError(f'Columnas faltantes: {faltantes}')
+        self.fondo = str(fondo)
+        self.df = df.loc[df['fondo'].astype(str).str.strip().str.casefold() == self.fondo.strip().casefold()].copy()
+        if self.df.empty:
+            raise ValueError(f'No existen observaciones del fondo {fondo!r}.')
+        self.df['fecha'] = pd.to_datetime(self.df['fecha'], errors='coerce')
+        self.df = self.df.loc[self.df['entidad'].notna()].copy()
+        if self.df['fecha'].notna().sum() == 0:
+            raise ValueError('No existen fechas válidas.')
+        self.fechaTexto = self.df['fecha'].max().strftime('%Y%m%d')
+        self.df_resultado = df_resultado
+        self.rolling = bool(rolling)
+        self.columnas_modelo = self.columnas
+        self.window_size, self.step_size = int(window_size), int(step_size)
+        self.min_registros, self.n_estimators = int(min_registros), int(n_estimators)
+        self.contamination, self.random_state = float(contamination), int(random_state)
+        self.por_entidad = True
+        self.agente, self.modulo = AGENTE_DESEQUILIBRIO, DES_MODULO_ANOMALIAS
+        base = Path(DATA_ROOT)
+        self.ruta_resultado = str(base / RESULTADOS_ROOT / self.agente / self.modulo / self.fechaTexto)
+        self.ruta_modelo = str(base / MODELOS_ROOT / self.agente / self.modulo)
+        self.ruta_temporal = str(base / TEMPORAL_ROOT / self.agente / self.modulo)
+        Path(self.ruta_resultado).mkdir(parents=True, exist_ok=True)
+        self.entidades_disponibles = sorted(self.df['entidad'].astype(str).unique())
+        self.modelos_por_entidad = {}  # diccionarios: modelo, scaler, umbral, columnas, etc.
+        self.modelos_por_ventana = {}
+        self.rutas_modelos_por_entidad = {}
+        self.rutas_resultados_por_entidad = {}
+        self.errores_por_entidad = {}
+        self.df_validacion = pd.DataFrame()
+        self.df_resultado_global = pd.DataFrame()
+        self.resultado = None  # DataFrame real, no lista de mensajes
+        self.modelo, self.scaler, self.parametros, self.score = None, None, None, None
 
-        return df1
-    """    
-    def graficar_dispersion(self):
-        if "anomalia" not in self.df.columns or "score_anomalia" not in self.df.columns:
-            raise ValueError("El DataFrame debe tener columnas 'anomalia' y 'score_anomalia'")
+    def _preparar_entidad(self, df):
+        sub = df.copy()
+        sub['fecha'] = pd.to_datetime(sub['fecha'], errors='coerce')
+        for c in self.columnas:
+            sub[c] = pd.to_numeric(sub[c], errors='coerce').replace([np.inf, -np.inf], np.nan)
+        sub = sub.dropna(subset=['fecha'] + self.columnas).sort_values('fecha').reset_index(drop=True)
+        if len(sub) < self.min_registros:
+            raise ValueError(f'Se requieren {self.min_registros} registros completos; hay {len(sub)}.')
+        if sub['fecha'].nunique() != len(sub):
+            raise ValueError('Existen fechas duplicadas para esta entidad; agregue los datos antes del modelado.')
+        constantes = [c for c in self.columnas if sub[c].nunique() < 2]
+        if constantes:
+            raise ValueError(f'Indicadores constantes: {constantes}')
+        return sub
 
-        df_ent = self.df
-        print('por entidad ',self.por_entidad)
-        if not self.por_entidad:
-            entidades_codificadas = [col for col in df_ent.columns if col.startswith("entidad_")]
-            df_ent["entidad"] = "ENTIDAD_BASE"  
-            for col in entidades_codificadas:
-                df_ent.loc[df_ent[col] == 1, "entidad"] = col.replace("entidad_", "").replace("_", " ")
-            
-            df_ent = df_ent.drop(columns=[col for col in df_ent.columns if col.startswith("entidad_")])
-        columnas_usar = df_ent.columns.difference(["entidad", "fondo", "fecha"]).tolist()
-        columnas_usar = ["tasa_crecimiento_aportantes","tasa_crecimiento_pensionados","tasa_crecimiento_rentabilidad"]
-        x_col=columnas_usar[1] 
-        y_col=columnas_usar[0]
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(
-            data=df_ent, x=x_col, y=y_col,
-            hue="anomalia", palette={1: "blue", -1: "red", 0: "green"}, style="anomalia", s=60
-        )
-        plt.title(f"Anomalías detectadas en {y_col} vs {x_col}")
-        handles, labels = plt.gca().get_legend_handles_labels()
-        plt.legend(handles=handles, labels=["Normal", "Anómalo"], title="Anomalía")        
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"dispersion.png")
-        plt.savefig(ruta, bbox_inches="tight") 
-        
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
+    def _ajustar(self, train):
+        scaler = RobustScaler().fit(train[self.columnas])
+        x = scaler.transform(train[self.columnas])
+        modelo = IsolationForest(n_estimators=self.n_estimators, contamination='auto',
+                                 random_state=self.random_state, n_jobs=-1)
+        modelo.fit(x)
+        scores = modelo.score_samples(x)
+        umbral = float(np.quantile(scores, self.contamination))
+        return {'modelo': modelo, 'scaler': scaler, 'umbral': umbral,
+                'columnas': self.columnas, 'fondo': self.fondo,
+                'fecha_entrenamiento': str(train['fecha'].max().date()),
+                'contamination': self.contamination}
 
-    def graficar_anomalias_temporales(self, entidad):
+    def _aplicar(self, df, bundle):
+        scores = bundle['modelo'].score_samples(bundle['scaler'].transform(df[self.columnas]))
+        return scores, (scores < bundle['umbral']).astype(int)
 
-        df_ent = self.df
-        if not self.por_entidad:
-            entidades_codificadas = [col for col in df_ent.columns if col.startswith("entidad_")]
-            df_ent["entidad"] = "ENTIDAD_BASE"  
-            for col in entidades_codificadas:
-                df_ent.loc[df_ent[col] == 1, "entidad"] = col.replace("entidad_", "").replace("_", " ")
-            
-            df_ent = df_ent.drop(columns=[col for col in df_ent.columns if col.startswith("entidad_")])
+    def _evaluacion_entidad(self, sub, entidad, n_splits=5):
+        # Ventanas cronológicas train/test; nunca se ajusta sobre test.
+        n = len(sub)
+        tam_train = self.window_size if self.rolling else max(self.min_registros, int(n * .6))
+        if n <= tam_train:
+            return []
+        step = max(1, int(np.ceil((n - tam_train) / max(1, n_splits))))
+        filas = []
+        for fin_train in range(tam_train, n, step):
+            train = sub.iloc[max(0, fin_train - self.window_size) if self.rolling else 0:fin_train]
+            test = sub.iloc[fin_train:min(n, fin_train + step)]
+            if test.empty:
+                continue
+            b = self._ajustar(train)
+            s_train = b['modelo'].score_samples(b['scaler'].transform(train[self.columnas]))
+            s_test, pred = self._aplicar(test, b)
+            ks, pv = ks_2samp(s_train, s_test)
+            filas.append({'entidad': entidad, 'split': len(filas)+1,
+                          'fecha_fin_train': train['fecha'].max(),
+                          'fecha_inicio_test': test['fecha'].min(),
+                          'observaciones_train': len(train), 'observaciones_test': len(test),
+                          'anomalias_detectadas': int(pred.sum()),
+                          'porcentaje_anomalias': float(pred.mean()*100),
+                          'score_train_mean': float(s_train.mean()),
+                          'score_test_mean': float(s_test.mean()),
+                          'ks_stat': float(ks), 'ks_pvalue': float(pv),
+                          'umbral': b['umbral']})
+        return filas
 
-        df_ent = self.df[self.df["entidad"] == entidad].copy()
-        plt.figure(figsize=(10, 4))
-        df_anomalias = df_ent[df_ent["anomalia"].isin([-1, 1])]
+    def validacion_cruzada_rolling(self, df=None, n_splits=5):
+        return self._validacion(df, n_splits=n_splits, rolling=True)
 
-        plt.scatter(
-            df_anomalias["fecha"],
-            df_anomalias["score_anomalia"],
-            color="red", label="Anomalía"
-        )
-        plt.title(f"Anomalías detectadas en la entidad {entidad}")
-        plt.xlabel("Fecha")
-        plt.ylabel("Score")
-        plt.xticks(rotation=45)
-        plt.legend()
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"anomaliasTemporales.png")
-        plt.savefig(ruta, bbox_inches="tight") 
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
+    def validacion_cruzada(self, df=None, fecha_col='fecha', n_splits=5):
+        if fecha_col != 'fecha':
+            raise ValueError('La columna temporal requerida es fecha.')
+        return self._validacion(df, n_splits=n_splits, rolling=False)
 
-    def graficar_anomalias_temporales_todas(self, altura_por_entidad=2):
-        df = self.df
+    def _validacion(self, df=None, n_splits=5, rolling=None):
+        original = self.rolling
+        self.rolling = original if rolling is None else rolling
+        filas = []
+        try:
+            base = self.df if df is None else df
+            for entidad, grupo in base.groupby('entidad'):
+                try:
+                    filas.extend(self._evaluacion_entidad(self._preparar_entidad(grupo), str(entidad), n_splits))
+                except ValueError:
+                    pass
+        finally:
+            self.rolling = original
+        self.df_validacion = pd.DataFrame(filas)
+        return self.df_validacion
 
-        if not self.por_entidad:
-            entidades_codificadas = [col for col in df.columns if col.startswith("entidad_")]
-            df["entidad"] = "ENTIDAD_BASE"  
-            for col in entidades_codificadas:
-                df.loc[df[col] == 1, "entidad"] = col.replace("entidad_", "").replace("_", " ")
-            
-            df = df.drop(columns=[col for col in df.columns if col.startswith("entidad_")])        
-        #print(df.dtypes)
+    def _detectar_entidad(self, sub, entidad):
+        salida = sub.copy()
+        salida['score_anomalia'] = np.nan
+        salida['anomalia'] = pd.Series(pd.NA, index=salida.index, dtype='Int64')
+        salida['evaluado'] = 0
+        bundles = []
+        if self.rolling:
+            if len(sub) <= self.window_size:
+                raise ValueError(f'Rolling requiere más de {self.window_size} observaciones.')
+            # Una predicción temporal fuera de muestra por cada bloque, sin reentrenar en test.
+            for inicio in range(self.window_size, len(sub), self.step_size):
+                train = sub.iloc[inicio-self.window_size:inicio]
+                test = sub.iloc[inicio:min(len(sub), inicio+self.step_size)]
+                b = self._ajustar(train)
+                sc, pr = self._aplicar(test, b)
+                salida.loc[test.index, 'score_anomalia'] = sc
+                salida.loc[test.index, 'anomalia'] = pr
+                salida.loc[test.index, 'evaluado'] = 1
+                bundles.append(b)
+        else:
+            # Retrospectiva del conjunto completo: in-sample, no equivalente a backtesting.
+            b = self._ajustar(sub)
+            sc, pr = self._aplicar(sub, b)
+            salida['score_anomalia'] = sc
+            salida['anomalia'] = pd.Series(pr, dtype='Int64')
+            salida['evaluado'] = 1
+            bundles.append(b)
+        # Modelo de despliegue: se ajusta con el histórico completo (no para evaluar backtest).
+        final = self._ajustar(sub)
+        final['entidad'] = entidad
+        final['rolling'] = self.rolling
+        final['window_size'] = self.window_size
+        final['step_size'] = self.step_size
+        self.modelos_por_entidad[entidad] = final
+        self.modelos_por_ventana[entidad] = bundles
+        return salida
 
-        entidades = df["entidad"].unique()
-        n = len(entidades)
-        fig, axs = plt.subplots(n, 1, figsize=(12, altura_por_entidad * n), sharex=True)
-        palette_entidades = sns.color_palette("tab10", n_colors=len(entidades))
-        color_dict = dict(zip(entidades, palette_entidades)) 
+    def entrenar_y_detectar(self, df=None):
+        resultados = []
+        base = self.df if df is None else df
+        self.errores_por_entidad = {}
+        for entidad, grupo in base.groupby('entidad'):
+            entidad = str(entidad)
+            try:
+                sub = self._preparar_entidad(grupo)
+                salida = self._detectar_entidad(sub, entidad)
+                resultados.append(salida)
+            except Exception as exc:
+                self.errores_por_entidad[entidad] = str(exc)
+                warnings.warn(f'Entidad {entidad}: {exc}')
+        if not resultados:
+            raise ValueError(f'Ninguna entidad pudo procesarse: {self.errores_por_entidad}')
+        self.df_resultado_global = pd.concat(resultados, ignore_index=True).sort_values(['entidad', 'fecha']).reset_index(drop=True)
+        self.resultado = self.df_resultado_global
+        return self.resultado
 
-        if n == 1:
-            axs = [axs]
+    def ejecutar(self, graficos=False, n_splits=5):
+        self._validacion(n_splits=n_splits)
+        self.df_validacion.to_csv(Path(self.ruta_resultado) / 'historial_validacion_anomalias.csv', index=False)
+        salida = self.entrenar_y_detectar()
+        resumenes_drivers = []
+        for entidad, grupo in salida.groupby('entidad'):
+            sufijo = f'{_seguro(self.fondo)}_{_seguro(entidad)}'
+            csv = Path(self.ruta_resultado) / f'resultados_{sufijo}.csv'
+            grupo.to_csv(csv, index=False)
+            self.rutas_resultados_por_entidad[str(entidad)] = str(csv)
+            modelo = Path(self.ruta_modelo) / f'{sufijo}_modelo.pkl'
+            _guardar_pickle(self.modelos_por_entidad[str(entidad)], modelo)
+            self.rutas_modelos_por_entidad[str(entidad)] = str(modelo)
+            dr = self.drivers_anomalia(df=grupo)
+            dr.insert(0, 'entidad', entidad)
+            dr.to_csv(Path(self.ruta_resultado) / f'drivers_{sufijo}.csv', index=False)
+            resumenes_drivers.append(dr)
+            if graficos:
+                vis = VisualizadorAnomalias(grupo, self.columnas)
+                vis.ruta_resultado = str(Path(self.ruta_resultado) / f'graficos_{_seguro(entidad)}')
+                vis.graficar_anomalias_temporales(entidad)
+                if len(self.columnas) >= 2:
+                    vis.graficar_dispersion()
+                vis.graficar_top_drivers(dr)
+        ruta_global = Path(self.ruta_resultado) / f'resultados_{_seguro(self.fondo)}.csv'
+        salida.to_csv(ruta_global, index=False)
+        self.ruta_resultado_global = str(ruta_global)
+        pd.concat(resumenes_drivers, ignore_index=True).to_csv(
+            Path(self.ruta_resultado) / f'drivers_{_seguro(self.fondo)}.csv', index=False)
+        # Compatibilidad con el reporte histórico de drivers del subagente.
+        # Se calcula sobre el consolidado, pero únicamente con indicadores del modelo.
+        nombre_drivers = 'drivers_anomalias_rolling.csv' if self.rolling else 'drivers_anomalias_df.csv'
+        df_drivers = self.drivers_anomalia(df=salida)
+        df_drivers.to_csv(Path(self.ruta_resultado) / nombre_drivers, index=False)
+        self.ruta_drivers_anomalias = str(Path(self.ruta_resultado) / nombre_drivers)        
+        pd.DataFrame([{'entidad': k, 'error': v} for k, v in self.errores_por_entidad.items()],
+                     columns=['entidad', 'error']).to_csv(Path(self.ruta_resultado) / 'errores_por_entidad.csv', index=False)
+        return salida
 
-        for i, entidad in enumerate(entidades):
-            ax = axs[i]
-            subdf = df[df["entidad"] == entidad].copy()
-            ax.plot(subdf["fecha"], subdf["score_anomalia"], label=None,  color=color_dict[entidad])
-            subdf_anom = subdf[subdf["anomalia"].isin([-1, 1])]
-            ax.scatter(
-                subdf_anom["fecha"],
-                subdf_anom["score_anomalia"],
-                color="red", label="Anomalía", s=20
-            )            
-            #ax.scatter(
-            #    subdf[subdf["anomalia"] == -1]["fecha"],
-            #    subdf[subdf["anomalia"] == -1]["score_anomalia"],
-            #    color="red", label="Anomalía", s=20
-            #)
-            ax.set_title(f"{entidad}", fontsize=8, loc="left")
-            ax.tick_params(axis='x', labelrotation=45)
-            ax.tick_params(axis='both', labelsize=8)
-            ax.set_ylabel("Score", fontsize=8)
-            ax.legend(loc="upper left", fontsize=7)
-            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
-            for spine in ax.spines.values():  # ← Oculta todos los bordes del gráfico
-                spine.set_visible(False)                      
+    def guardar_modelo(self, ruta):
+        """Exporta conjunto de bundles por entidad (nunca reutiliza un scaler global)."""
+        _guardar_pickle({'version': 2, 'fondo': self.fondo, 'columnas': self.columnas,
+                         'modelos_por_entidad': self.modelos_por_entidad}, ruta)
 
-        plt.xlabel("Fecha")
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"anomaliasTemporalesTodas.png")
-        plt.savefig(ruta, bbox_inches="tight") 
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
+    def cargar_modelo(self, ruta):
+        with open(ruta, 'rb') as f:
+            d = pickle.load(f)  # Solo archivos confiables.
+        if 'modelos_por_entidad' not in d:
+            raise ValueError('Formato de modelo incompatible.')
+        self.modelos_por_entidad = d['modelos_por_entidad']
+        self.columnas = list(d['columnas'])
+        self.columnas_modelo = self.columnas
+        self.fondo = d['fondo']
+        return self
+
+    def predecir_anomalias(self, df_nuevo):
+        obligatorias = set(self.columnas) | {'entidad', 'fondo'}
+        faltan = obligatorias - set(df_nuevo.columns)
+        if faltan:
+            raise ValueError(f'Faltan columnas: {sorted(faltan)}')
+        salida = df_nuevo.copy()
+        salida['anomalia'] = pd.Series(pd.NA, index=salida.index, dtype='Int64')
+        salida['score_anomalia'] = np.nan
+        salida['evaluado'] = 0
+        for ent, indexes in salida.groupby('entidad').groups.items():
+            bundle = self.modelos_por_entidad.get(str(ent))
+            if bundle is None:
+                continue
+            sub = salida.loc[indexes]
+            if (sub['fondo'].astype(str) != self.fondo).any():
+                raise ValueError(f'Fondo distinto del modelo para {ent}.')
+            X = sub[self.columnas].apply(pd.to_numeric, errors='coerce').replace([np.inf,-np.inf],np.nan)
+            validos = X.notna().all(axis=1)
+            if not validos.any():
+                continue
+            ok = sub.loc[validos].copy()
+            ok[self.columnas] = X.loc[validos]
+            sc, pr = self._aplicar(ok, bundle)
+            salida.loc[ok.index, 'score_anomalia'] = sc
+            salida.loc[ok.index, 'anomalia'] = pr
+            salida.loc[ok.index, 'evaluado'] = 1
+        return salida
+
+    def drivers_anomalia(self, columnas=None, top_n=None, df=None):
+        """Diferencia descriptiva de medias, no atribución causal."""
+        fuente = self.resultado if df is None else df
+        if fuente is None:
+            raise ValueError('Ejecute el detector primero.')
+        columnas = list(self.columnas if columnas is None else columnas)
+        normales = fuente.loc[(fuente['evaluado'] == 1) & (fuente['anomalia'] == 0)]
+        anomalos = fuente.loc[(fuente['evaluado'] == 1) & (fuente['anomalia'] == 1)]
+        filas = []
+        for c in columnas:
+            mn = normales[c].mean() if len(normales) else np.nan
+            ma = anomalos[c].mean() if len(anomalos) else np.nan
+            filas.append({'variable': c, 'media_normal': mn, 'media_anomalo': ma,
+                          'diferencia': ma-mn, 'abs_diferencia': abs(ma-mn)})
+        return pd.DataFrame(filas).sort_values('abs_diferencia', ascending=False,
+                                               na_position='last').head(top_n).reset_index(drop=True)
 
     def resumen_por_entidad(self):
-        df = self.df
-        resumen = (
-            df.groupby("entidad")["anomalia"]
-            .apply(lambda x: x.isin([-1, 1]).sum())
-            .reset_index(name="total_anomalias")
-        )
-        resumen["porcentaje"] = round(resumen["total_anomalias"] / len(self.df) * 100, 2)
-        return resumen
+        if self.resultado is None:
+            return pd.DataFrame(columns=['entidad','anomalia','normal','total','%_anomalias'])
+        d = self.resultado[self.resultado['evaluado'] == 1]
+        return d.groupby('entidad').agg(anomalia=('anomalia','sum'), total=('anomalia','size')).assign(
+            normal=lambda x: x.total-x.anomalia,
+            **{'%_anomalias': lambda x: 100*x.anomalia/x.total}).reset_index()
+
+    def resumen_general(self):
+        if self.resultado is None:
+            return {'total_observaciones': 0, 'evaluadas': 0, 'anomalias_detectadas': 0}
+        d = self.resultado
+        return {'total_observaciones': len(d), 'evaluadas': int(d['evaluado'].sum()),
+                'anomalias_detectadas': int((d['anomalia'] == 1).sum())}
+
+
+class VisualizadorAnomalias:
+    def __init__(self, df_resultado, columnas_valores, por_entidad=True, mostrarGrafico=False):
+        self.df = df_resultado.copy()
+        self.columnas_valores = list(columnas_valores)
+        self.por_entidad, self.mostrarGrafico = por_entidad, mostrarGrafico
+        fecha = pd.to_datetime(self.df['fecha']).max().strftime('%Y%m%d')
+        self.ruta_resultado = str(Path(DATA_ROOT) / RESULTADOS_ROOT /
+                                  AGENTE_DESEQUILIBRIO / DES_MODULO_ANOMALIAS / fecha)
+
+    def _fin(self, nombre):
+        import matplotlib.pyplot as plt
+        Path(self.ruta_resultado).mkdir(parents=True, exist_ok=True)
+        plt.tight_layout()
+        plt.savefig(Path(self.ruta_resultado)/nombre, bbox_inches='tight', dpi=140)
+        if self.mostrarGrafico:
+            plt.show()
+        plt.close()
+
+    def graficar_dispersion(self):
+        import matplotlib.pyplot as plt
+        if len(self.columnas_valores) < 2:
+            return
+        x, y = self.columnas_valores[:2]
+        plt.figure(figsize=(9, 5))
+        for a, sub in self.df[self.df['evaluado'] == 1].groupby('anomalia'):
+            plt.scatter(sub[x], sub[y], s=22, label='Anómalo' if a == 1 else 'Normal')
+        plt.xlabel(x); plt.ylabel(y); plt.legend(); plt.title('Dispersión de anomalías')
+        self._fin('dispersion.png')
+
+    def graficar_anomalias_temporales(self, entidad):
+        import matplotlib.pyplot as plt
+        sub = self.df[self.df['entidad'].astype(str) == str(entidad)].sort_values('fecha')
+        plt.figure(figsize=(10,4))
+        plt.plot(sub['fecha'], sub['score_anomalia'], label='Puntuación')
+        anomalos = sub[sub['anomalia'] == 1]
+        plt.scatter(anomalos['fecha'], anomalos['score_anomalia'], label='Anomalía', color='red')
+        plt.title(f'Anomalías: {entidad}'); plt.xlabel('Fecha'); plt.ylabel('score_samples (menor = anómalo)')
+        plt.legend(); self._fin('anomalias_temporales.png')
+
+    def graficar_anomalias_temporales_todas(self, altura_por_entidad=2):
+        for ent in self.df['entidad'].dropna().unique():
+            self.graficar_anomalias_temporales(ent)
+
+    def resumen_por_entidad(self):
+        return self.df[self.df['evaluado'] == 1].groupby('entidad')['anomalia'].agg(['sum','count'])
 
     def mapa_calor_variables(self):
-        df = self.df
-        df_anomalias = df[df["anomalia"].isin([-1, 1])]
-        columnas_validas = [col for col in self.columnas_valores if col in df.columns and pd.api.types.is_numeric_dtype(df[col])]
-        df_melt = df_anomalias.melt(id_vars=["entidad"], value_vars=columnas_validas)        
-        tabla = df_melt.groupby(["entidad", "variable"]).size().unstack(fill_value=0)
-        tabla = tabla.loc[tabla.sum(axis=1).sort_values(ascending=False).index,
-                        tabla.sum().sort_values(ascending=False).index]        
+        # La anomalía es multivariante; un conteo por variable no identifica drivers.
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        d = self.df[self.df['anomalia'] == 1]
+        if d.empty:
+            return
+        # Medias de indicadores originales por entidad, sin atribución causal.
+        tabla = d.groupby('entidad')[self.columnas_valores].mean()
+        plt.figure(figsize=(9,4)); sns.heatmap(tabla, cmap='viridis', annot=True)
+        self._fin('mapa_variables_anomalas.png')
 
-        plt.figure(figsize=(10, 6))
-        sns.heatmap(tabla, annot=True, fmt="d", cmap="Reds")
-        plt.title("Frecuencia de anomalías por variable y entidad")
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"mapaCalor.png")
-        plt.savefig(ruta, bbox_inches="tight") 
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
-
-
-    def graficar_top_drivers(self, df_drivers: pd.DataFrame, top_n: int = 10):
-        df_top = df_drivers.head(top_n)
-        plt.figure(figsize=(10, 5))
-        sns.barplot(data=df_top, x="abs_diferencia", y="variable", palette="coolwarm")
-        plt.title(f"Top {top_n} variables con mayor diferencia entre normales y anómalos")
-        plt.xlabel("Diferencia Absoluta de Media")
-        plt.ylabel("Variable")
-        plt.tight_layout()
-        ruta = os.path.join(self.ruta_resultado,"topDrivers.png")
-        plt.savefig(ruta, bbox_inches="tight") 
-        if not self.mostrarGrafico:
-            plt.close()
-        plt.show()
+    def graficar_top_drivers(self, df_drivers, top_n=10):
+        import matplotlib.pyplot as plt
+        d = df_drivers.head(top_n).dropna(subset=['abs_diferencia'])
+        if d.empty:
+            return
+        plt.figure(figsize=(9,4)); plt.barh(d['variable'], d['abs_diferencia'])
+        plt.xlabel('Diferencia absoluta de medias (descriptiva)')
+        self._fin('top_drivers.png')
 
 
-"""
-# Ejemplo de uso:
-if __name__ == "__main__":
-    DATA_ROOT = "data"     
-    agente = "Agente de Riesgo de Liquidez"
-    modulo = "Detección de anomalías de liquidez"
-    fecha = "2024-12-31"
-    ruta = os.path.join(DATA_ROOT, "temporal", agente, modulo, fecha+".parquet")
-    ruta_modelo = os.path.join(DATA_ROOT, "modelos", "anomalias_general.pkl")    
-    df = pd.read_parquet(ruta)
-    #df.to_csv('data/resultados/anomalias.csv')
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Detección de anomalías por entidad con IsolationForest.')
+    #parser.add_argument('--archivo', required=True, help='CSV o Parquet de entrada')
+    parser.add_argument('--fecha', default='2026-08-31', help='Fecha del archivo temporal, AAAA-MM-DD')    
+    parser.add_argument('--fondo', default='ROP')
+    parser.add_argument('--entidad', default=None, help='Referencia opcional; se procesan todas las entidades del fondo')
+    parser.add_argument('--columnas', nargs='+', default=None, help='Indicadores explícitos; recomendados')
+    parser.add_argument('--rolling', action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument('--window-size', type=int, default=24)
+    parser.add_argument('--step-size', type=int, default=6)
+    parser.add_argument('--contamination', type=float, default=.05)
+    parser.add_argument('--min-registros', type=int, default=12)
+    parser.add_argument('--n-estimators', type=int, default=100)
+    parser.add_argument('--graficos', action='store_true')
+    args = parser.parse_args(argv)
 
-    #print(df.dtypes)
-    # Definir columnas excluyendo entidad, fondo y fecha
-    #Conteo de fechas por entidad
-    conteo_fechas = df.groupby("entidad")["fecha"].nunique().sort_values()
-    # Filtrar entidades con más de 24 fechas únicas
-    entidades_validas = conteo_fechas[conteo_fechas > 24].index.tolist()    
+    archivo = Path(DATA_ROOT)/TEMPORAL_ROOT/AGENTE_DESEQUILIBRIO/DES_MODULO_ANOMALIAS/f'{args.fecha}.parquet'
+    if not archivo.is_file():
+        parser.error(f'No se encontró: {archivo}')
+    try:
+        df = pd.read_parquet(archivo) if archivo.suffix.lower() == '.parquet' else pd.read_csv(archivo)
+        if args.columnas is None:
+            excluir = {'entidad','fondo','fecha','cluster','anomalia','score_anomalia','evaluado'}
+            columnas = [c for c in df.select_dtypes(include='number').columns if c not in excluir]
+            print('Columnas numéricas detectadas:', columnas)
+            print('Compruebe que ninguna es identificador; use --columnas para control explícito.')
+        else:
+            columnas = args.columnas
+        detector = AnomaliaDetector(df, rolling=args.rolling, columnas=columnas,
+                                   fondo=args.fondo, window_size=args.window_size,
+                                   step_size=args.step_size, contamination=args.contamination,
+                                   min_registros=args.min_registros, n_estimators=args.n_estimators)
+        resultado = detector.ejecutar(graficos=args.graficos)
+        print(f'Registros: {len(resultado)}; evaluados: {int(resultado.evaluado.sum())}; '
+              f'entidades: {len(detector.rutas_resultados_por_entidad)}')
+        print('Consolidado:', Path(detector.ruta_resultado_global).resolve())
+        for ent, ruta in detector.rutas_resultados_por_entidad.items():
+            print(f'  {ent}: {ruta}')
+        for ent, err in detector.errores_por_entidad.items():
+            print(f'  ERROR {ent}: {err}')
+        return 0
+    except Exception:
+        traceback.print_exc()
+        return 1
 
-    # Aplicar filtro al DataFrame
-    df = df[df["entidad"].isin(entidades_validas)].copy()    
-    #print(conteo_fechas)
-    
-    por_entidad = True
-    # Verificar fechas faltantes por entidad
-    #entidades = df["entidad"].unique()
-    #for ent in entidades:
-    #    fechas_ent = df[df["entidad"] == ent]["fecha"]
-    #    print(f"{ent}: fechas únicas = {fechas_ent.nunique()}, rango = {fechas_ent.min()} → {fechas_ent.max()}")    
 
-    # Codificación one-hot de 'entidad'
-    if not por_entidad:
-        df = pd.get_dummies(df, columns=["entidad"], drop_first=True)
-        print(df.head(10))
-        #columnas_cluster = df.columns.difference(["fondo", "fecha"]).tolist()    
-        columnas_usar = df.columns.difference(["fondo", "fecha"]).tolist()
-    else:
-        #columnas_cluster = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()    
-        columnas_usar = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
-    print(columnas_usar)
-    #df.to_csv("data/baseanomalias.csv", index=False) 
-
-    # Inicializar detector con enfoque rolling
-    detector = AnomaliaDetector(
-        columnas=columnas_usar,
-        window_size=36,
-        step_size=12,
-        contamination=0.03
-    )    
-    validacion_df = detector.validacion_cruzada_rolling(df)
-    print("vc ",validacion_df)    
-  
-    df_anotado = detector.entrenar_y_detectar(df)
-
-    detector.guardar_modelo(ruta_modelo)
-
-    #detector.cargar_modelo(ruta_modelo)
-    #predicciones_nuevo = detector.predecir_anomalias(df_anotado)    
-
-    #print("Resumen general:", detector.resumen_general())
-    print("Resumen por entidad:")
-    print(detector.resumen_por_entidad())
-    df_drivers = detector.drivers_anomalia()
-    print(df_drivers.head(10))
-
-    # Crear instancia del visualizador
-    visualizador = VisualizadorAnomalias(df_resultado=df_anotado, columnas_valores=columnas_usar)
-    #visualizador.ajusta_dataset(por_entidad)
-    # Mostrar gráfico de dispersión entre dos variables
-    visualizador.graficar_dispersion()
-
-    # Mostrar evolución temporal de anomalías para una entidad específica
-    #visualizador.graficar_anomalias_temporales(entidad="VIDA PLENA")
-    visualizador.graficar_anomalias_temporales_todas(altura_por_entidad=2)
-
-    # Mostrar resumen de anomalías por entidad
-    print(visualizador.resumen_por_entidad())
-
-    # Mostrar mapa de calor de frecuencia de anomalías por variable y entidad
-    visualizador.mapa_calor_variables()
-
-    drivers = detector.drivers_anomalia()
-    visualizador.graficar_top_drivers(drivers)
-
-"""
+if __name__ == '__main__':
+    raise SystemExit(main())

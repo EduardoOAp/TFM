@@ -1,0 +1,885 @@
+[
+{
+  "subagente": "Agente de Riesgo de Liquidez",
+  "modulo": "Clustering de riesgo de liquidez",
+  "indicadores": [
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "indice_diversificacion_shannon",
+    "concentracion_activos",
+    "volatilidad_valorcuota_30d",
+    "volatilidad_reciente_activo_neto",
+    "diversificacion_y_riesgo",
+    "herfindahl_hirschman_externo",    
+    "herfindahl_hirschman_local"
+  ],
+  "series": [
+    {
+      "parquet": "rendimiento",
+      "columnas": [
+        {
+          "columna_valor": "fecha"
+        },
+        {
+          "columna_valor": "rentabilidad",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "REAL"
+            },
+            {
+              "columna": "periodicidad",
+              "condicion": "==",
+              "valor": "ANUAL"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+},
+{
+  "subagente": "Agente de Riesgo de Liquidez",
+  "modulo": "Detección de anomalías de liquidez",
+  "indicadores": [
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "indice_diversificacion_shannon",
+    "diversificacion_y_riesgo",
+    "concentracion_activos",
+    "volatilidad_valorcuota_30d"
+  ],
+  "series": [
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "fecha"
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_ingresos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "INGRESO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_gastos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "GASTO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_activo_neto",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "ACTIVO NETO"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "monto_activo_neto",
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "indice_diversificacion_shannon",
+    "diversificacion_y_riesgo"
+  ]
+},
+{
+  "subagente": "Agente de Riesgo de Liquidez",
+  "modulo": "Forecasting de liquidez del activo neto",
+  "indicadores": [
+    "variacion_activo_neto",
+    "rentabilidad_acumulada_mes",
+    "volatilidad_reciente_activo_neto",
+    "volatilidad_valorcuota_30d",
+    "diversificacion_y_riesgo",
+    "beta",
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "tasa_fuga_afiliados"
+  ],
+  "series": [
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_activo_neto",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "ACTIVO NETO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_gastos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "GASTO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    },
+    {
+      "parquet": "rendimiento",
+      "columnas": [
+        {
+          "columna_valor": "rentabilidad",
+          "alias": "rentabilidad_real_anual",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "REAL"
+            },
+            {
+              "columna": "periodicidad",
+              "condicion": "==",
+              "valor": "ANUAL"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "monto_activo_neto",
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "indice_diversificacion_shannon",
+    "diversificacion_y_riesgo"
+  ]
+},
+{
+  "subagente": "Agente de Diversificación",
+  "modulo": "Análisis de diversificación de portafolio",
+  "indicadores": [
+    "indice_diversificacion_shannon",
+    "concentracion_activos",
+    "diversificacion_y_riesgo",
+    "sharpe_ratio",
+    "herfindahl_hirschman_externo",    
+    "herfindahl_hirschman_local",
+    "indice_liquidez_portafolio",
+    "indice_riesgo_liquidez"
+  ],
+  "series": [
+    {
+      "parquet": "portafolio",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_por_instrumento",
+          "funcion":"suma"
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    }
+  ]
+},
+{
+  "subagente": "Agente de Diversificación",
+  "modulo": "Optimización de portafolios líquidos",
+  "indicadores": [
+    "indice_liquidez_portafolio",
+    "indice_riesgo_liquidez",
+    "concentracion_activos",
+    "sharpe_ratio",
+    "beta",
+    "indice_diversificacion_shannon"
+  ],
+  "series": [
+    {
+      "parquet": "portafolio",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_deuda_estandarizada",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "1"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_papel_comercial",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "2"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_acciones",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "3"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_participaciones",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "4"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_capital_de_riesgo",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "5"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_estructurados",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "6"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_recompras",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "7"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_coberturas",
+          "funcion": "suma",
+          "filtros": [
+            {
+              "columna": "codigoinstrumento",
+              "condicion": "==",
+              "valor": "8"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_por_instrumento",
+          "funcion":"suma"
+        }
+      ]
+    }    
+  ],
+  "columnasObjetivo": [
+    "sharpe_ratio",    
+    "indice_liquidez_portafolio",
+    "concentracion_activos",
+    "indice_diversificacion_shannon"
+  ]  
+},
+{
+  "subagente": "Agente de Desequilibrio Financiero",
+  "modulo": "Clustering de Riesgo Financiero",
+  "indicadores": [
+    "tasa_fuga_afiliados",
+    "tasa_captacion_afiliados",
+    "distribucion_afiliados_entidad_fondo",
+    "flujo_neto_afiliados_fondos",
+	"flujo_neto_afiliados_montos",
+    "indice_equilibrio_financiero",
+	"volatilidad_valorcuota_30d",
+	"rango_mensual_valorcuota",
+	"sharpe_ratio",
+	"tasa_aportacion",
+	"tasa_crecimiento_rentabilidad"
+  ],
+  "series": []
+},
+{
+  "subagente": "Agente de Desequilibrio Financiero",
+  "modulo": "Detección de Anomalías Financieras",
+  "indicadores": [
+    "indice_sostenibilidad_financiera",
+    "indice_sostenibilidad_pensiones",
+    "indice_envejecimiento",
+    "proporcion_pensionados_afiliados",
+    "tasa_crecimiento_pensionados",
+    "tasa_crecimiento_aportantes",
+    "rango_mensual_valorcuota",
+    "sharpe_ratio",
+    "tasa_aportacion",
+    "tasa_crecimiento_rentabilidad"
+  ],
+  "series": [
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_ingresos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "INGRESO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_gastos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "GASTO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_activo_neto",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "ACTIVO NETO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    },
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "salario_o_aporte_colones"
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "tasa_crecimiento_aportantes",    
+    "tasa_crecimiento_pensionados",
+    "tasa_crecimiento_rentabilidad",
+    "indice_sostenibilidad_financiera",
+    "indice_sostenibilidad_pensiones",
+    "indice_envejecimiento",
+    "proporcion_pensionados_afiliados",
+    "monto_activo_neto",
+    "monto_ingresos",
+    "monto_gastos",
+    "sharpe_ratio",
+    "tasa_aportacion"
+  ]
+},
+{
+  "subagente": "Agente de Desequilibrio Financiero",
+  "modulo": "Forecasting Financiero activo neto",
+  "indicadores": [
+    "variacion_activo_neto",
+    "rentabilidad_acumulada_mes",
+    "volatilidad_reciente_activo_neto",
+    "volatilidad_valorcuota_30d",
+    "rentabilidad_diaria",
+    "indice_equilibrio_financiero",
+    "rentabilidad_ajustada_comision",
+    "indice_riesgo_liquidez",
+    "rango_mensual_valorcuota",
+    "sharpe_ratio",
+    "beta",
+    "alpha_jensen",
+    "tasa_aportacion",
+    "tasa_crecimiento_rentabilidad"
+  ],
+  "series": [
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_activo_neto",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "ACTIVO NETO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "variacion_activo_neto",
+    "rango_mensual_valorcuota",
+    "monto_activo_neto",
+    "rentabilidad_acumulada_mes"
+  ]
+},
+{
+  "subagente": "Agente de Desequilibrio Financiero",
+  "modulo": "Forecasting Financiero valor cuota",
+  "indicadores": [
+    "volatilidad_valorcuota_30d",
+    "rentabilidad_diaria",
+    "rango_mensual_valorcuota"
+  ],
+  "series": [
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "valor_cuota",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "VALOR DE LA CUOTA"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "valor_cuota",
+    "rentabilidad_diaria",
+    "volatilidad_valorcuota_30d",    
+    "rango_mensual_valorcuota"
+  ]
+},
+{
+  "subagente": "Agente de Flujos de Fondos",
+  "modulo": "Clustering de flujos de afiliados",
+  "indicadores": [
+    "tasa_fuga_afiliados",
+    "flujo_neto_afiliados_fondos",
+    "flujo_neto_afiliados_montos",
+    "distribucion_afiliados_entidad_fondo",
+    "indice_riesgo_liquidez",
+    "indice_liquidez_portafolio",
+    "concentracion_activos",
+    "indice_diversificacion_shannon",
+    "diversificacion_y_riesgo",
+    "tasa_captacion_afiliados_lt"
+  ],
+  "series": [
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "aportantes",
+          "funcion":"suma"
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    },
+    {
+      "parquet": "Libre_transferencia",
+      "columnas": [
+        {
+          "columna_valor": "cantidad_saliente"
+        },
+        {
+          "columna_valor": "cantidad_entrante"
+        }
+      ]
+    }
+  ]
+},
+{
+  "subagente": "Agente de Flujos de Fondos",
+  "modulo": "Forecasting de fuga de afiliados",
+  "indicadores": [
+    "tasa_fuga_afiliados",
+    "tasa_captacion_afiliados",
+    "flujo_neto_afiliados_fondos",
+    "flujo_neto_afiliados_montos",
+    "tasa_crecimiento_aportantes",
+    "proporcion_pensionados_afiliados",
+    "volatilidad_valorcuota_30d",
+    "rango_mensual_valorcuota",
+    "tasa_aportacion",
+    "tasa_captacion_afiliados_lt"
+  ],
+  "series": [
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "aportantes",
+          "funcion": "suma"          
+        },
+        {
+          "columna_valor": "salario_o_aporte_colones",
+          "alias": "salario_promedio",
+          "funcion": "promedio"
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    },
+    {
+      "parquet": "rendimiento",
+      "columnas": [
+        {
+          "columna_valor": "rentabilidad",
+          "alias": "rentabilidad_real_anual",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "REAL"
+            },
+            {
+              "columna": "periodicidad",
+              "condicion": "==",
+              "valor": "ANUAL"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "tasa_fuga_afiliados",
+    "tasa_captacion_afiliados",
+    "tasa_captacion_afiliados_lt"    ,
+    "tasa_crecimiento_aportantes",
+    "proporcion_pensionados_afiliados",
+    "tasa_aportacion"
+  ] 
+},
+{
+  "subagente": "Agente de Flujos de Fondos",
+  "modulo": "Relación entre rentabilidad y flujos",
+  "indicadores": [
+    "rentabilidad_ajustada_comision",
+    "rentabilidad_acumulada_mes",
+    "flujo_neto_afiliados_fondos",
+    "flujo_neto_afiliados_montos",
+    "rango_mensual_valorcuota",
+    "tasa_captacion_afiliados_lt",
+    "tasa_crecimiento_rentabilidad",
+    "sharpe_ratio"
+  ],
+  "series": [
+    {
+      "parquet": "rendimiento",
+      "columnas": [
+        {
+          "columna_valor": "rentabilidad",
+          "alias": "rentabilidad_real_anual",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "REAL"
+            },
+            {
+              "columna": "periodicidad",
+              "condicion": "==",
+              "valor": "ANUAL"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "aportantes",
+          "funcion":"suma"          
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    },
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "valor_cuota_promedio",
+          "funcion": "promedio",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "VALOR DE LA CUOTA"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "parquet": "comision",
+      "columnas": [
+        {
+          "columna_valor": "comisión",
+          "alias": "comision_saldo",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "SALDO"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+},
+{
+  "subagente": "Agente de Sostenibilidad",
+  "modulo": "Forecasting de déficit financiero",
+  "indicadores": [
+    "indice_sostenibilidad_financiera",
+    "rentabilidad_ajustada_comision",
+    "indice_equilibrio_financiero",
+    "tasa_aportacion",
+    "variacion_activo_neto",
+    "rentabilidad_acumulada_mes",
+    "tasa_crecimiento_aportantes",
+    "tasa_crecimiento_pensionados"
+  ],
+  "series": [
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "salario_o_aporte_colones",
+          "alias": "salario_promedio",
+          "funcion": "promedio"
+        },
+        {
+          "columna_valor": "aportantes",
+          "alias": "aportantes_totales",
+          "funcion": "suma"
+        }
+      ]
+    },
+    {
+      "parquet": "beneficio",
+      "columnas": [
+        {
+          "columna_valor": "beneficiocolones",
+          "alias": "beneficio_promedio",
+          "funcion": "promedio"
+        },
+        {
+          "columna_valor": "beneficio",
+          "alias": "beneficios_totales",
+          "funcion": "suma"
+        }
+      ]
+    },
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "ingresos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "INGRESO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "montocolones",
+          "alias": "gastos",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "GASTO"
+            }
+          ]
+        },
+        {
+          "columna_valor": "fecha"
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "indice_equilibrio_financiero",
+    "indice_sostenibilidad_financiera",    
+    "tasa_aportacion"
+  ]
+}, 
+{
+  "subagente": "Agente de Sostenibilidad",
+  "modulo": "Forecasting demográfico",
+  "indicadores": [
+    "indice_envejecimiento",
+    "tasa_crecimiento_pensionados",
+    "proporcion_pensionados_afiliados",
+    "tasa_crecimiento_aportantes"
+  ],
+  "series": [
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "aportantes",
+          "alias": "aportantes_59_anios",
+          "funcion": "suma",		  
+          "filtros": [
+            {
+              "columna": "rangoedad",
+              "condicion": "contiene",
+              "valor": "59 A <"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "columnasObjetivo": [
+    "aportantes_59_anios",
+    "proporcion_pensionados_afiliados",
+    "indice_envejecimiento" 
+  ]
+},
+{
+  "subagente": "Agente de Sostenibilidad",
+  "modulo": "Clustering de sostenibilidad",
+  "indicadores": [
+    "indice_sostenibilidad_financiera",
+    "indice_sostenibilidad_pensiones",
+    "proporcion_pensionados_afiliados",
+    "indice_diversificacion_shannon",
+    "volatilidad_reciente_activo_neto",
+    "diversificacion_y_riesgo",
+    "herfindahl_hirschman_externo",
+    "herfindahl_hirschman_local",    
+    "beta",
+    "indice_carga_administrativa"
+  ],
+  "series": [
+    {
+      "parquet": "rendimiento",
+      "columnas": [
+        {
+          "columna_valor": "rentabilidad",
+          "alias": "rentabilidad_real_anual",
+          "filtros": [
+            {
+              "columna": "tipo",
+              "condicion": "==",
+              "valor": "REAL"
+            },
+            {
+              "columna": "periodicidad",
+              "condicion": "==",
+              "valor": "ANUAL"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "parquet": "cuenta",
+      "columnas": [
+        {
+          "columna_valor": "montocolones",
+          "alias": "monto_activo_neto",
+          "filtros": [
+            {
+              "columna": "cuenta",
+              "condicion": "contiene",
+              "valor": "ACTIVO NETO"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "parquet": "afiliado",
+      "columnas": [
+        {
+          "columna_valor": "aportantes",
+          "alias": "total_aportantes",
+          "funcion": "suma"
+        }
+      ]
+    }
+  ]
+}
+]
+
+

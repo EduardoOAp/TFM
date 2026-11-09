@@ -25,8 +25,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 from riesgo_agente.utils.config import AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC
 from riesgo_agente.utils.config import DATA_ROOT, TEMPORAL_ROOT, RESULTADOS_ROOT, MODELOS_ROOT
-from riesgo_agente.utils.helpers import completar_fechas_diarias
-
+from riesgo_agente.utils.helpers import completar_fechas_diarias, unir_serie_y_predicciones
 #warnings.filterwarnings("ignore", category=UserWarning)
 #warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
@@ -47,6 +46,7 @@ class ForecastingValorCuota:
         self.ruta_resultado = os.path.join(DATA_ROOT, RESULTADOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)
         self.ruta_temporal = os.path.join(DATA_ROOT, TEMPORAL_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)
         self.ruta_modelo = os.path.join(DATA_ROOT, MODELOS_ROOT, AGENTE_DESEQUILIBRIO, DES_MODULO_FORECAST_VC)        
+        os.makedirs(self.ruta_resultado, exist_ok=True)
 
     def entrenar_holt_winters(self, df: pd.DataFrame) -> Dict:
         df = df.copy()

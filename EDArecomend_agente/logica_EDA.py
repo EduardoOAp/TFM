@@ -73,8 +73,16 @@ class AgenteEDARecomendador:
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
                 except Exception as e:
                     print(f"No se pudo convertir la columna {col}: {e}")
+        
+        nombre_archivo = f"df_base_{agente.replace(' ', '_')}_{modulo.replace(' ', '_')}"
+        archivo = os.path.join(self.carpeta_salida, f"{nombre_archivo}_recomendacion.csv")
+        df.to_csv(archivo, index=False)
+
+        todas_las_columnas = df.columns.difference(["entidad", "fondo", "fecha"]).tolist()
+        reporte["columnas"] = df.columns.tolist()
         # Paso 1: Nulos
-        nulos_pct = df[columnas_indicadores].isnull().mean()
+        #nulos_pct = df[columnas_indicadores].isnull().mean()
+        nulos_pct = df[todas_las_columnas].isnull().mean()
         columnas_sin_muchos_nulos = nulos_pct[nulos_pct <= umbral_nulos].index.tolist()
         reporte["columnas_sin_muchos_nulos"] = columnas_sin_muchos_nulos
 
@@ -128,6 +136,7 @@ class AgenteEDARecomendador:
     
     def ejecutar_EDA(self, fecha_inicio, fecha_fin, fondo):
         resultados_globales = {}
+        #print(JSON_PATH)
         with open(JSON_PATH, 'r', encoding='utf-8') as f:
             estructura = json.load(f)
         for bloque in estructura:

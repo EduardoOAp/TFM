@@ -1,1 +1,1 @@
-from .orquestador import AgenteOrquestador
+from .orquestador import AgenteOrquestador, AgenteOrquestadorLocal
